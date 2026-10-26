@@ -10,7 +10,7 @@ pub struct TrajectoryPoints<'a> {
 }
 
 impl<'a> TrajectoryPoints<'a> {
-    pub fn new(segment: &'a LineSegment, max_index: usize) -> Self {
+    pub(crate) fn new(segment: &'a LineSegment, max_index: usize) -> Self {
         Self { segment, actual_index: 0, max_index, is_completed: false }
     }
 }

@@ -1,5 +1,5 @@
 use kinematics::Point;
-use trajectory::{LineSegment, TrajectoryError, TrajectoryPoints};
+use trajectory::{LineSegment, TrajectoryError};
 
 fn segment(start: (f64, f64), end: (f64, f64)) -> LineSegment {
     LineSegment {
@@ -253,66 +253,16 @@ fn points_handles_values_immediately_adjacent_to_division_boundaries() {
 }
 
 #[test]
-fn trajectory_points_new_yields_every_requested_index_exactly_once() {
-    let line = segment((-16.0, 8.0), (16.0, -24.0));
-    for max_index in [1, 2, 3, 16, 255] {
-        let actual: Vec<_> = TrajectoryPoints::new(&line, max_index).collect();
-        assert_eq!(actual.len(), max_index + 1);
-        for (index, result) in actual.into_iter().enumerate() {
-            let point = result.unwrap_or_else(|_| panic!("valid point rejected"));
-            assert_point_eq(
-                point,
-                line.point_at(index as f64 / max_index as f64)
-                    .unwrap_or_else(|_| panic!("valid parameter rejected")),
-            );
-        }
-    }
-}
-
-#[test]
-fn trajectory_points_new_with_zero_index_yields_a_degenerate_point_once() {
-    let line = segment((f64::MAX, -f64::MAX), (f64::MAX, -f64::MAX));
-    let mut points = TrajectoryPoints::new(&line, 0);
-
-    assert_point_eq(
-        points
-            .next()
-            .unwrap()
-            .unwrap_or_else(|_| panic!("point rejected")),
-        line.start,
-    );
-    assert!(points.next().is_none());
-    assert!(points.next().is_none());
-}
-
-#[test]
-fn trajectory_points_propagates_point_at_errors_as_iterator_items() {
-    let line = segment((-f64::MAX, 0.0), (f64::MAX, 0.0));
-    let mut points = TrajectoryPoints::new(&line, 2);
-
-    assert_point_eq(
-        points
-            .next()
-            .unwrap()
-            .unwrap_or_else(|_| panic!("start rejected")),
-        line.start,
-    );
-    assert!(matches!(
-        points.next(),
-        Some(Err(TrajectoryError::PointOutOfSegment))
-    ));
-    assert_point_eq(
-        points
-            .next()
-            .unwrap()
-            .unwrap_or_else(|_| panic!("end rejected")),
-        line.end,
-    );
-    assert!(points.next().is_none());
-}
-
-#[test]
-fn points_rejects_a_requested_resolution_that_cannot_fit_in_usize() {
+fn points_rejects_requested_resolutions_that_cannot_fit_in_usize() {
     let line = segment((0.0, 0.0), (1.0, 0.0));
-    assert!(line.points(f64::from_bits(1)).is_err());
+
+    // The first division overflows to infinity; the second remains finite but
+    // requests strictly more intervals than usize can represent.
+    let finite_overflow_resolution = 1.0 / ((usize::MAX as f64) * 2.0);
+    for maximum in [f64::from_bits(1), finite_overflow_resolution] {
+        assert!(matches!(
+            line.points(maximum),
+            Err(TrajectoryError::TooManySegments)
+        ));
+    }
 }

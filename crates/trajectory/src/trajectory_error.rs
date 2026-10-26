@@ -3,5 +3,5 @@ pub enum TrajectoryError {
     PointOutOfSegment,
     SegmentNonFinite,
     InvalidMaxPointDitance,
-    MaxPointDistanteTooBig
+    TooManySegments,
 }

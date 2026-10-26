@@ -8,6 +8,8 @@ pub struct LineSegment {
 }
 
 impl LineSegment {
+    const MAX_SEGMENTS: usize = usize::MAX;
+
     pub fn point_at(&self, t: f64) -> Result<Point, TrajectoryError> {
         Self::validate_t(t)?;
 
@@ -50,8 +52,8 @@ impl LineSegment {
 
         let points_number = libm::ceil(self.length()? / max_point_distance);
 
-        if !points_number.is_finite() {
-            return Err(TrajectoryError::MaxPointDistanteTooBig);
+        if !points_number.is_finite() || points_number >= Self::MAX_SEGMENTS as f64 {
+            return Err(TrajectoryError::TooManySegments);
         }
 
         let points_number = points_number as usize;

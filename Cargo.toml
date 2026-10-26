@@ -2,5 +2,5 @@
 resolver = "3"
 
 members = [
-    "crates/kinematics",
+    "crates/kinematics", "crates/trajectory",
 ]

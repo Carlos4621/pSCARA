@@ -1,6 +1,6 @@
 pub use kinematics::Point;
 
-use crate::TrajectoryError;
+use crate::{TrajectoryError, TrajectoryPoints};
 
 pub struct LineSegment {
     pub start : Point,
@@ -41,6 +41,22 @@ impl LineSegment {
         }
 
         Ok(distance)
+    }
+
+    pub fn points(&self, max_point_distance: f64) -> Result<TrajectoryPoints<'_>, TrajectoryError> {
+        if !max_point_distance.is_finite() || max_point_distance <= 0.0 {
+            return Err(TrajectoryError::InvalidMaxPointDitance);
+        }
+
+        let points_number = libm::ceil(self.length()? / max_point_distance);
+
+        if !points_number.is_finite() {
+            return Err(TrajectoryError::MaxPointDistanteTooBig);
+        }
+
+        let points_number = points_number as usize;
+        
+        Ok(TrajectoryPoints::new(&self, points_number))
     }
 
     fn validate_t(t: f64) -> Result<f64, TrajectoryError> {

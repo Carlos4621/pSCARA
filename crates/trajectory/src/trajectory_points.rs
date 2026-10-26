@@ -37,7 +37,7 @@ impl Iterator for TrajectoryPoints<'_> {
             (self.actual_index as f64) / (self.max_index as f64)
         };
 
-        self.actual_index = self.actual_index.wrapping_add(1);
+        self.actual_index = self.actual_index.wrapping_add(1); // El desbordamiento es irrelevante porque la variable ya no se usará nunca más
 
         let result = match self.segment.point_at(t) {
             Ok(ok) => Ok(ok),

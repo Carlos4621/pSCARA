@@ -88,7 +88,7 @@ fn points_includes_exact_endpoints_and_is_fused_after_completion() {
 }
 
 #[test]
-fn points_yields_one_point_for_degenerate_segments_at_every_finite_scale() {
+fn points_yields_start_and_end_for_degenerate_segments_at_every_finite_scale() {
     for coordinate in [
         -f64::MAX,
         -1.0,
@@ -102,8 +102,9 @@ fn points_yields_one_point_for_degenerate_segments_at_every_finite_scale() {
         let line = segment((coordinate, -coordinate), (coordinate, -coordinate));
         for maximum in [f64::from_bits(1), 1.0, f64::MAX] {
             let actual = collect_points(&line, maximum);
-            assert_eq!(actual.len(), 1);
+            assert_eq!(actual.len(), 2);
             assert_point_eq(actual[0], line.start);
+            assert_point_eq(actual[1], line.end);
         }
     }
 }
@@ -157,25 +158,16 @@ fn points_matches_point_at_and_respects_the_maximum_distance_on_a_grid() {
                         .unwrap_or_else(|_| panic!("finite length rejected"));
                     for maximum in [0.125, 0.5, 1.0, 2.0, 16.0] {
                         let actual = collect_points(&line, maximum);
-                        let segment_count = libm::ceil(length / maximum) as usize;
+                        let segment_count = (libm::ceil(length / maximum) as usize).max(1);
 
-                        // A zero-length trajectory has one point; every other trajectory has
-                        // one more point than intervals.
-                        let expected_len = if segment_count == 0 {
-                            1
-                        } else {
-                            segment_count + 1
-                        };
-                        assert_eq!(actual.len(), expected_len);
+                        // There is always at least one interval, so start and end are emitted
+                        // even when both endpoints represent the same point.
+                        assert_eq!(actual.len(), segment_count + 1);
                         assert_point_eq(actual[0], line.start);
                         assert_point_eq(*actual.last().unwrap(), line.end);
 
                         for (index, point) in actual.iter().copied().enumerate() {
-                            let t = if segment_count == 0 {
-                                0.0
-                            } else {
-                                index as f64 / segment_count as f64
-                            };
+                            let t = index as f64 / segment_count as f64;
                             assert_point_eq(
                                 point,
                                 line.point_at(t).unwrap_or_else(|_| {

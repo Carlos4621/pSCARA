@@ -50,7 +50,7 @@ impl LineSegment {
             return Err(TrajectoryError::InvalidMaxPointDitance);
         }
 
-        let points_number = libm::ceil(self.length()? / max_point_distance);
+        let points_number = libm::ceil(self.length()? / max_point_distance).max(1.0);
 
         if !points_number.is_finite() || points_number >= Self::MAX_SEGMENTS as f64 {
             return Err(TrajectoryError::TooManySegments);

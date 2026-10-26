@@ -1,6 +1,6 @@
-use kinematics::Point;
 use crate::LineSegment;
 use crate::TrajectoryError;
+use kinematics::Point;
 
 pub struct TrajectoryPoints<'a> {
     segment: &'a LineSegment,
@@ -11,7 +11,12 @@ pub struct TrajectoryPoints<'a> {
 
 impl<'a> TrajectoryPoints<'a> {
     pub(crate) fn new(segment: &'a LineSegment, max_index: usize) -> Self {
-        Self { segment, actual_index: 0, max_index, is_completed: false }
+        Self {
+            segment,
+            actual_index: 0,
+            max_index,
+            is_completed: false,
+        }
     }
 }
 
@@ -28,15 +33,25 @@ impl Iterator for TrajectoryPoints<'_> {
             1.0
         } else if self.actual_index == 0 {
             0.0
-        }  else {
+        } else {
             (self.actual_index as f64) / (self.max_index as f64)
         };
 
         self.actual_index = self.actual_index.wrapping_add(1);
 
-        match self.segment.point_at(t) {
-            Ok(ok) => Some(Ok(ok)),
-            Err(err) => Some(Err(err)),
+        let result = match self.segment.point_at(t) {
+            Ok(ok) => Ok(ok),
+            Err(err) => Err(err),
+        };
+
+        if result.is_err() {
+            self.is_completed = true;
         }
+
+        Some(result)
     }
 }
+
+#[cfg(test)]
+#[path = "../tests/unit/trajectory_points.rs"]
+mod tests;

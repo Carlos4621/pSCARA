@@ -3,16 +3,13 @@
 mod point;
 pub use point::Point;
 
+mod kinematics_error;
+pub use kinematics_error::KinematicsError;
+
 #[derive(Debug, Clone, Copy)]
 pub struct JointAngles {
     pub first_theta: f64,
     pub second_theta: f64,
-}
-
-#[derive(Debug)]
-pub enum KinematicsError {
-    UnreachablePoint,
-    ArmWithInvalidLength,
 }
 
 #[derive(Debug)]
@@ -100,13 +97,13 @@ impl Scara {
     }
 
     fn is_reachable_point(&self, point: Point) -> bool {
-        let euclides_distance = point.distance_from_origin();
+        let distance_from_origin = point.distance_from_origin();
 
         let boundary_tolerance = self.max_tolerance_distance();
 
-        euclides_distance.is_finite()
-            && (euclides_distance <= self.max_reachable_distance() + boundary_tolerance)
-            && (euclides_distance >= self.min_reachable_distance() - boundary_tolerance)
+        distance_from_origin.is_finite()
+            && (distance_from_origin <= self.max_reachable_distance() + boundary_tolerance)
+            && (distance_from_origin >= self.min_reachable_distance() - boundary_tolerance)
     }
 
     const fn max_reachable_distance(&self) -> f64 {

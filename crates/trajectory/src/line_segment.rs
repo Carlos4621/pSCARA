@@ -58,7 +58,7 @@ impl LineSegment {
 
         let points_number = points_number as usize;
         
-        Ok(TrajectoryPoints::new(&self, points_number))
+        Ok(TrajectoryPoints::new(self, points_number))
     }
 
     fn validate_t(t: f64) -> Result<f64, TrajectoryError> {

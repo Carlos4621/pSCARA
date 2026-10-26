@@ -1,4 +1,5 @@
 pub enum TrajectoryError {
     TOutOfBounds,
-    PointOutOfSegment
+    PointOutOfSegment,
+    SegmentNonFinite
 }

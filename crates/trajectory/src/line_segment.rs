@@ -29,6 +29,20 @@ impl LineSegment {
         Ok(Point { x, y })
     }
 
+    pub fn length(&self) -> Result<f64, TrajectoryError> {
+        let dx = self.start.x - self.end.x;
+
+        let dy = self.start.y - self.end.y;
+
+        let distance = libm::hypot(dx, dy);
+
+        if !distance.is_finite() {
+            return Err(TrajectoryError::SegmentNonFinite);
+        }
+
+        Ok(distance)
+    }
+
     fn validate_t(t: f64) -> Result<f64, TrajectoryError> {
         if !t.is_finite() || !(0.0..=1.0).contains(&t) {
             return Err(TrajectoryError::TOutOfBounds);

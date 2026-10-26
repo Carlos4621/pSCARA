@@ -37,6 +37,98 @@ fn assert_point_out_of_segment(result: Result<Point, TrajectoryError>) {
     assert!(matches!(result, Err(TrajectoryError::PointOutOfSegment)));
 }
 
+fn length(line: &LineSegment) -> f64 {
+    match line.length() {
+        Ok(length) => length,
+        Err(_) => panic!("lenght() unexpectedly returned an error"),
+    }
+}
+
+fn assert_segment_non_finite(result: Result<f64, TrajectoryError>) {
+    assert!(matches!(result, Err(TrajectoryError::SegmentNonFinite)));
+}
+
+#[test]
+fn lenght_matches_known_horizontal_vertical_and_diagonal_distances() {
+    for (start, end, expected) in [
+        ((0.0, 0.0), (3.0, 4.0), 5.0),
+        ((3.0, 4.0), (0.0, 0.0), 5.0),
+        ((-2.0, 7.0), (6.0, 7.0), 8.0),
+        ((-2.0, 7.0), (-2.0, -8.0), 15.0),
+        ((-7.0, -11.0), (5.0, 5.0), 20.0),
+    ] {
+        assert_eq!(length(&segment(start, end)), expected);
+    }
+}
+
+#[test]
+fn lenght_is_zero_for_degenerate_segments_across_finite_scales() {
+    for coordinate in [
+        -f64::MAX,
+        -1.0,
+        -f64::from_bits(1),
+        -0.0,
+        0.0,
+        f64::from_bits(1),
+        1.0,
+        f64::MAX,
+    ] {
+        assert_eq!(
+            length(&segment(
+                (coordinate, -coordinate),
+                (coordinate, -coordinate)
+            )),
+            0.0
+        );
+    }
+}
+
+#[test]
+fn lenght_is_invariant_under_endpoint_reversal_and_coordinate_swapping() {
+    for (start, end) in [
+        ((-8.0, 3.0), (4.0, -13.0)),
+        ((f64::MIN_POSITIVE, 0.0), (0.0, f64::MIN_POSITIVE)),
+        ((f64::MAX, f64::MAX), (f64::MAX / 2.0, f64::MAX)),
+    ] {
+        let forward = length(&segment(start, end));
+        assert_eq!(length(&segment(end, start)), forward);
+        assert_eq!(
+            length(&segment((start.1, start.0), (end.1, end.0))),
+            forward
+        );
+    }
+}
+
+#[test]
+fn lenght_uses_scale_safe_hypotenuse_calculation() {
+    for scale in [
+        f64::from_bits(1),
+        f64::MIN_POSITIVE,
+        1.0,
+        f64::from_bits((2023_u64) << 52),
+    ] {
+        let line = segment((0.0, 0.0), (3.0 * scale, 4.0 * scale));
+        assert_eq!(length(&line), 5.0 * scale);
+    }
+
+    assert_eq!(length(&segment((0.0, 0.0), (f64::MAX, 0.0))), f64::MAX);
+}
+
+#[test]
+fn lenght_rejects_non_finite_coordinates_and_unrepresentable_distances() {
+    for line in [
+        segment((f64::NAN, 0.0), (0.0, 0.0)),
+        segment((0.0, f64::NAN), (0.0, 0.0)),
+        segment((f64::NEG_INFINITY, 0.0), (0.0, 0.0)),
+        segment((0.0, f64::INFINITY), (0.0, 0.0)),
+        segment((-f64::MAX, 0.0), (f64::MAX, 0.0)),
+        segment((0.0, -f64::MAX), (0.0, f64::MAX)),
+        segment((0.0, 0.0), (f64::MAX, f64::MAX)),
+    ] {
+        assert_segment_non_finite(line.length());
+    }
+}
+
 // Small integers and dyadic parameters keep the following oracles exact in f64.
 // This avoids accepting a geometric error through an overly broad tolerance.
 #[test]

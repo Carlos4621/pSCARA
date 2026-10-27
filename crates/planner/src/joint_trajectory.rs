@@ -21,18 +21,15 @@ impl<'a> JointTrajectory<'a> {
     ) -> Result<Self, PlannerError> {
         let trajectory_points = line
             .points(max_point_distance)
-            .map_err(PlannerError::Trajectory);
-
-        match trajectory_points {
-            Ok(trajectory_points) => Ok(Self {
-                scara,
-                trajectory_points,
-                configuration,
-                is_finished: false,
-                previous_angle: None,
-            }),
-            Err(err) => Err(err),
-        }
+            .map_err(PlannerError::Trajectory)?;
+        
+        Ok(Self {
+            scara,
+            trajectory_points,
+            configuration,
+            is_finished: false,
+            previous_angle: None,
+        })
     }
 
     fn unwrap_angle(previous: f64, next: f64) -> Result<f64, PlannerError> {

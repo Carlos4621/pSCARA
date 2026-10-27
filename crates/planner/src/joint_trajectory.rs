@@ -53,7 +53,6 @@ impl<'a> Iterator for JointTrajectory<'a> {
 
         if result.is_err() {
             self.is_finished = true;
-            return None;
         }
 
         Some(result)

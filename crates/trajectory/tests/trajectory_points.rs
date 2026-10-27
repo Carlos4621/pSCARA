@@ -79,7 +79,7 @@ fn points_includes_exact_endpoints_and_is_fused_after_completion() {
     );
 
     let mut last = line.start;
-    while let Some(result) = points.next() {
+    for result in points.by_ref() {
         last = result.unwrap_or_else(|_| panic!("valid trajectory point rejected"));
     }
     assert_point_eq(last, line.end);
@@ -241,6 +241,23 @@ fn points_handles_values_immediately_adjacent_to_division_boundaries() {
         for pair in actual.windows(2) {
             assert!(distance(pair[0], pair[1]) <= maximum);
         }
+    }
+}
+
+#[test]
+fn points_adds_a_segment_when_rounded_division_underestimates_the_required_count() {
+    let length = f64::from_bits(0x0b7b_9d85_8392_0fd1);
+    let maximum = f64::from_bits(0x0b62_6903_ad0c_0a8b);
+
+    // Floating-point division rounds the quotient down to exactly three even
+    // though multiplying back proves that three intervals are insufficient.
+    assert_eq!(length / maximum, 3.0);
+    assert!(3.0 * maximum < length);
+
+    let actual = collect_points(&segment((0.0, 0.0), (length, 0.0)), maximum);
+    assert_eq!(actual.len(), 5);
+    for pair in actual.windows(2) {
+        assert!(distance(pair[0], pair[1]) <= maximum);
     }
 }
 

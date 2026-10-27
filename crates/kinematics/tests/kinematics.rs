@@ -376,9 +376,46 @@ mod tests {
         }
     }
 
-    // Known production limitations: new() accepts these finite positive lengths,
-    // but squaring/multiplying them in inverse() yields Ok with NaN angles.
-    // Keep the desired behavior as explicit regressions without changing production.
+    #[test]
+    fn inverse_reports_numerical_failure_when_normalization_erases_an_arm() {
+        let smallest_length = f64::from_bits(1);
+        let largest_length = f64::MAX;
+
+        for (first_arm_length, second_arm_length) in [
+            (smallest_length, largest_length),
+            (largest_length, smallest_length),
+        ] {
+            let robot = Scara::new(first_arm_length, second_arm_length).unwrap();
+
+            for point in [
+                Point {
+                    x: largest_length,
+                    y: 0.0,
+                },
+                Point {
+                    x: -largest_length,
+                    y: 0.0,
+                },
+                Point {
+                    x: 0.0,
+                    y: largest_length,
+                },
+                Point {
+                    x: 0.0,
+                    y: -largest_length,
+                },
+            ] {
+                for configuration in configurations() {
+                    assert!(matches!(
+                        robot.inverse(point, configuration),
+                        Err(KinematicsError::NumericalFailure)
+                    ));
+                }
+            }
+        }
+    }
+
+    // Normalization keeps uniformly scaled geometries away from overflow and underflow.
     #[test]
     fn inverse_returns_finite_angles_when_squared_lengths_overflow() {
         assert_scale_invariance(1e200);

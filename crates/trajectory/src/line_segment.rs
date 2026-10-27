@@ -3,8 +3,8 @@ pub use kinematics::Point;
 use crate::{TrajectoryError, TrajectoryPoints};
 
 pub struct LineSegment {
-    pub start : Point,
-    pub end : Point,
+    pub start: Point,
+    pub end: Point,
 }
 
 impl LineSegment {
@@ -25,7 +25,7 @@ impl LineSegment {
         let y = self.start.y + (self.end.y - self.start.y) * t;
 
         if !x.is_finite() || !y.is_finite() {
-            return Err(TrajectoryError::PointOutOfSegment)
+            return Err(TrajectoryError::PointOutOfSegment);
         }
 
         Ok(Point { x, y })
@@ -50,15 +50,24 @@ impl LineSegment {
             return Err(TrajectoryError::InvalidMaxPointDitance);
         }
 
-        let points_number = libm::ceil(self.length()? / max_point_distance).max(1.0);
+        let length = self.length()?;
 
-        if !points_number.is_finite() || points_number >= Self::MAX_SEGMENTS as f64 {
+        let mut segments = libm::ceil(length / max_point_distance).max(1.0);
+
+        if !segments.is_finite() || segments >= Self::MAX_SEGMENTS as f64 {
             return Err(TrajectoryError::TooManySegments);
         }
 
-        let points_number = points_number as usize;
-        
-        Ok(TrajectoryPoints::new(self, points_number))
+        // Corregir un posible redondeo hacia abajo.
+        if segments * max_point_distance < length {
+            segments += 1.0;
+        }
+
+        if !segments.is_finite() || segments >= Self::MAX_SEGMENTS as f64 {
+            return Err(TrajectoryError::TooManySegments);
+        }
+
+        Ok(TrajectoryPoints::new(self, segments as usize))
     }
 
     fn validate_t(t: f64) -> Result<f64, TrajectoryError> {

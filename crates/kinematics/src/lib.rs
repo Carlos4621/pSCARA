@@ -31,7 +31,7 @@ pub struct Scara {
 }
 
 impl Scara {
-    const MAX_NUMERICAL_TOLERANCE_FACTOR : f64 = 64.0;
+    const MAX_NUMERICAL_TOLERANCE_FACTOR: f64 = 64.0;
 
     pub fn new(first_arm_length: f64, second_arm_length: f64) -> Result<Self, KinematicsError> {
         if !Self::is_valid_arm_length(first_arm_length)
@@ -58,18 +58,28 @@ impl Scara {
         Point { x, y }
     }
 
-    pub fn inverse(&self, point: Point, configuration : ElbowConfiguration) -> Result<JointAngles, KinematicsError> {
+    pub fn inverse(
+        &self,
+        point: Point,
+        configuration: ElbowConfiguration,
+    ) -> Result<JointAngles, KinematicsError> {
         if !self.is_reachable_point(point) {
             return Err(KinematicsError::UnreachablePoint);
         }
 
-        let normalized = Self::normalize_geometry(point, self.first_arm_length, self.second_arm_length);
+        let normalized =
+            Self::normalize_geometry(point, self.first_arm_length, self.second_arm_length);
 
-        let numerator = normalized.point.x * normalized.point.x + normalized.point.y * normalized.point.y
+        let numerator = normalized.point.x * normalized.point.x
+            + normalized.point.y * normalized.point.y
             - normalized.first_arm_length * normalized.first_arm_length
             - normalized.second_arm_length * normalized.second_arm_length;
 
         let denominator = 2.0 * normalized.first_arm_length * normalized.second_arm_length;
+
+        if denominator == 0.0 || !denominator.is_finite() {
+            return Err(KinematicsError::NumericalFailure);
+        }
 
         let cos_theta2 = (numerator / denominator).clamp(-1.0, 1.0);
 
@@ -85,6 +95,10 @@ impl Scara {
         );
 
         let first_theta = alpha - beta;
+
+        if !first_theta.is_finite() || !second_theta.is_finite() {
+            return Err(KinematicsError::NumericalFailure);
+        }
 
         Ok(JointAngles {
             first_theta,
@@ -118,11 +132,21 @@ impl Scara {
         Self::MAX_NUMERICAL_TOLERANCE_FACTOR * f64::EPSILON * self.max_reachable_distance()
     }
 
-    fn normalize_geometry(point: Point, first_arm_length: f64, second_arm_length: f64) -> NormalizedGeometry {
-        let normalize_factor = first_arm_length.max(second_arm_length).max(point.x.abs()).max(point.y.abs());
+    fn normalize_geometry(
+        point: Point,
+        first_arm_length: f64,
+        second_arm_length: f64,
+    ) -> NormalizedGeometry {
+        let normalize_factor = first_arm_length
+            .max(second_arm_length)
+            .max(point.x.abs())
+            .max(point.y.abs());
 
         NormalizedGeometry {
-            point: Point { x: point.x / normalize_factor, y: point.y / normalize_factor },
+            point: Point {
+                x: point.x / normalize_factor,
+                y: point.y / normalize_factor,
+            },
             first_arm_length: first_arm_length / normalize_factor,
             second_arm_length: second_arm_length / normalize_factor,
         }

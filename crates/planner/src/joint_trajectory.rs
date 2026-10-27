@@ -18,7 +18,7 @@ impl<'a> JointTrajectory<'a> {
         max_point_distance: f64,
         configuration: ElbowConfiguration,
     ) -> Result<Self, PlannerError> {
-        let trajectory_points = line.points(max_point_distance);
+        let trajectory_points = line.points(max_point_distance).map_err(PlannerError::Trajectory);
 
         match trajectory_points {
             Ok(trajectory_points) => Ok(Self {
@@ -27,7 +27,7 @@ impl<'a> JointTrajectory<'a> {
                 configuration,
                 is_finished: false,
             }),
-            Err(err) => Err(PlannerError::Trajectory(err)),
+            Err(err) => Err(err),
         }
     }
 }
@@ -43,11 +43,11 @@ impl<'a> Iterator for JointTrajectory<'a> {
         let point = self.trajectory_points.next();
 
         let point = match point {
-            Some(point) => match point {
+            Some(point) => match point.map_err(PlannerError::Trajectory) {
                 Ok(ok) => ok,
                 Err(err) => {
                     self.is_finished = true;
-                    return Some(Err(PlannerError::Trajectory(err)));
+                    return Some(Err(err));
                 }
             },
             None => {
@@ -56,13 +56,13 @@ impl<'a> Iterator for JointTrajectory<'a> {
             }
         };
 
-        let angles = self.scara.inverse(point, self.configuration);
+        let angles = self.scara.inverse(point, self.configuration).map_err(PlannerError::Kinematics);
 
         match angles {
             Ok(ok) => Some(Ok(ok)),
             Err(err) => {
                 self.is_finished = true;
-                Some(Err(PlannerError::Kinematics(err)))
+                Some(Err(err))
             }
         }
     }

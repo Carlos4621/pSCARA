@@ -1,6 +1,5 @@
 [workspace]
 resolver = "3"
 
-members = [
-    "crates/kinematics", "crates/trajectory",
+members = ["crates/kinematics", "crates/planner", "crates/trajectory",
 ]

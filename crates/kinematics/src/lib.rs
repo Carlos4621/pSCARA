@@ -12,19 +12,20 @@ pub struct JointAngles {
     pub second_theta: f64,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ElbowConfiguration {
     Positive,
     Negative,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 struct NormalizedGeometry {
     point: Point,
     first_arm_length: f64,
     second_arm_length: f64,
 }
 
+#[derive(Debug)]
 pub struct Scara {
     first_arm_length: f64,
     second_arm_length: f64,

@@ -2,6 +2,7 @@ pub use kinematics::Point;
 
 use crate::{TrajectoryError, TrajectoryPoints};
 
+#[derive(Debug)]
 pub struct LineSegment {
     pub start: Point,
     pub end: Point,

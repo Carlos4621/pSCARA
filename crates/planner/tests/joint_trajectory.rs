@@ -177,6 +177,52 @@ fn forward_joint_trajectory_forward_round_trip_covers_a_joint_angle_grid() {
 }
 
 #[test]
+fn iterator_unwraps_the_pi_branch_cut_between_consecutive_samples() {
+    let robot = Scara::new(100.0, 60.0).unwrap();
+    let path = line((-100.0, 1.0), (-100.0, -1.0));
+    let expected_points: Vec<_> = path.points(0.25).unwrap().map(Result::unwrap).collect();
+
+    for configuration in configurations() {
+        let raw_angles: Vec<_> = expected_points
+            .iter()
+            .copied()
+            .map(|point| robot.inverse(point, configuration).unwrap())
+            .collect();
+        assert!(
+            raw_angles
+                .windows(2)
+                .any(|pair| (pair[1].first_theta - pair[0].first_theta).abs() > PI)
+        );
+
+        let unwrapped_angles: Vec<_> = JointTrajectory::new(&robot, &path, 0.25, configuration)
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+
+        assert_eq!(unwrapped_angles.len(), expected_points.len());
+        assert_eq!(unwrapped_angles[0].first_theta, raw_angles[0].first_theta);
+        assert_eq!(unwrapped_angles[0].second_theta, raw_angles[0].second_theta);
+        assert!(unwrapped_angles.windows(2).all(|pair| {
+            (pair[1].first_theta - pair[0].first_theta).abs() <= PI
+                && (pair[1].second_theta - pair[0].second_theta).abs() <= PI
+        }));
+        assert!(
+            unwrapped_angles
+                .iter()
+                .zip(raw_angles.iter())
+                .any(|(unwrapped, raw)| (unwrapped.first_theta - raw.first_theta).abs() > PI)
+        );
+
+        for (angles, expected_point) in unwrapped_angles
+            .into_iter()
+            .zip(expected_points.iter().copied())
+        {
+            assert_point_close(robot.forward(angles), expected_point, 160.0);
+        }
+    }
+}
+
+#[test]
 fn configuration_selects_the_expected_inverse_branch() {
     let robot = Scara::new(100.0, 50.0).unwrap();
     let path = line((100.0, 50.0), (100.0, 50.0));

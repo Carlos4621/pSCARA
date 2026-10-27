@@ -5,4 +5,5 @@ use trajectory::TrajectoryError;
 pub enum PlannerError {
     Trajectory(TrajectoryError),
     Kinematics(KinematicsError),
+    AngleNonFinite,
 }

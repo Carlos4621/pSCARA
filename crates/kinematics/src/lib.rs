@@ -7,4 +7,4 @@ mod kinematics_error;
 pub use kinematics_error::KinematicsError;
 
 mod scara;
-pub use scara::{Scara, ElbowConfiguration, JointAngles};
+pub use scara::{ElbowConfiguration, JointAngles, Scara};

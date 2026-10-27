@@ -9,6 +9,7 @@ pub struct JointTrajectory<'a> {
     trajectory_points: TrajectoryPoints<'a>,
     configuration: ElbowConfiguration,
     is_finished: bool,
+    previous_angle: Option<JointAngles>,
 }
 
 impl<'a> JointTrajectory<'a> {
@@ -28,9 +29,34 @@ impl<'a> JointTrajectory<'a> {
                 trajectory_points,
                 configuration,
                 is_finished: false,
+                previous_angle: None,
             }),
             Err(err) => Err(err),
         }
+    }
+
+    fn unwrap_angle(previous: f64, next: f64) -> Result<f64, PlannerError> {
+        if !previous.is_finite() || !next.is_finite() {
+            return Err(PlannerError::AngleNonFinite);
+        }
+
+        let result = previous + libm::atan2(libm::sin(next - previous), libm::cos(next - previous));
+
+        if !result.is_finite() {
+            return Err(PlannerError::AngleNonFinite);
+        }
+
+        Ok(result)
+    }
+
+    fn unwrap_joint_angles(
+        previous: JointAngles,
+        next: JointAngles,
+    ) -> Result<JointAngles, PlannerError> {
+        Ok(JointAngles {
+            first_theta: Self::unwrap_angle(previous.first_theta, next.first_theta)?,
+            second_theta: Self::unwrap_angle(previous.second_theta, next.second_theta)?,
+        })
     }
 }
 
@@ -51,12 +77,21 @@ impl<'a> Iterator for JointTrajectory<'a> {
             self.scara
                 .inverse(point, self.configuration)
                 .map_err(PlannerError::Kinematics)
+                .and_then(|next| match self.previous_angle {
+                    Some(previous) => Self::unwrap_joint_angles(previous, next),
+                    None => Ok(next),
+                })
         });
 
-        if result.is_err() {
-            self.is_finished = true;
+        match result {
+            Ok(ok) => self.previous_angle = Some(ok),
+            Err(_) => self.is_finished = true,
         }
 
         Some(result)
     }
 }
+
+#[cfg(test)]
+#[path = "../tests/unit/joint_trajectory.rs"]
+mod tests;

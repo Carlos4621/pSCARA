@@ -48,7 +48,9 @@ impl<'a> Iterator for JointTrajectory<'a> {
         };
 
         let result = point.map_err(PlannerError::Trajectory).and_then(|point| {
-            self.scara.inverse(point, self.configuration).map_err(PlannerError::Kinematics)
+            self.scara
+                .inverse(point, self.configuration)
+                .map_err(PlannerError::Kinematics)
         });
 
         if result.is_err() {

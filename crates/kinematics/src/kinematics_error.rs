@@ -4,4 +4,5 @@ pub enum KinematicsError {
     ArmWithInvalidLength,
     InvalidPoint,
     NumericalFailure,
+    InvalidAngle,
 }

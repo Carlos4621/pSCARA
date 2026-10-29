@@ -1,15 +1,9 @@
-use crate::{KinematicsError, Point};
+use crate::{JointAngles, KinematicsError, Point};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ElbowConfiguration {
     Positive,
     Negative,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct JointAngles {
-    pub first_theta: f64,
-    pub second_theta: f64,
 }
 
 #[derive(Debug)]
@@ -41,16 +35,16 @@ impl Scara {
         })
     }
 
-    pub fn forward(&self, angles: JointAngles) -> Point {
-        let second_arm_absolute_angle = angles.first_theta + angles.second_theta;
+    pub fn forward(&self, angles: JointAngles) -> Result<Point, KinematicsError> {
+        let second_arm_absolute_angle = angles.first_theta() + angles.second_theta();
 
-        let x = self.first_arm_length * libm::cos(angles.first_theta)
+        let x = self.first_arm_length * libm::cos(angles.first_theta())
             + self.second_arm_length * libm::cos(second_arm_absolute_angle);
 
-        let y = self.first_arm_length * libm::sin(angles.first_theta)
+        let y = self.first_arm_length * libm::sin(angles.first_theta())
             + self.second_arm_length * libm::sin(second_arm_absolute_angle);
 
-        Point { x, y }
+        Point::new(x, y)
     }
 
     pub fn inverse(
@@ -63,10 +57,10 @@ impl Scara {
         }
 
         let normalized =
-            Self::normalize_geometry(point, self.first_arm_length, self.second_arm_length);
+            Self::normalize_geometry(point, self.first_arm_length, self.second_arm_length)?;
 
-        let numerator = normalized.point.x * normalized.point.x
-            + normalized.point.y * normalized.point.y
+        let numerator = normalized.point.x() * normalized.point.x()
+            + normalized.point.y() * normalized.point.y()
             - normalized.first_arm_length * normalized.first_arm_length
             - normalized.second_arm_length * normalized.second_arm_length;
 
@@ -83,7 +77,7 @@ impl Scara {
             ElbowConfiguration::Negative => -libm::acos(cos_theta2),
         };
 
-        let alpha = libm::atan2(point.y, point.x);
+        let alpha = libm::atan2(point.y(), point.x());
         let beta = libm::atan2(
             normalized.second_arm_length * libm::sin(second_theta),
             normalized.first_arm_length + normalized.second_arm_length * libm::cos(second_theta),
@@ -95,10 +89,7 @@ impl Scara {
             return Err(KinematicsError::NumericalFailure);
         }
 
-        Ok(JointAngles {
-            first_theta,
-            second_theta,
-        })
+        JointAngles::new(first_theta, second_theta)
     }
 
     const fn is_valid_arm_length(length: f64) -> bool {
@@ -131,19 +122,16 @@ impl Scara {
         point: Point,
         first_arm_length: f64,
         second_arm_length: f64,
-    ) -> NormalizedGeometry {
+    ) -> Result<NormalizedGeometry, KinematicsError> {
         let normalize_factor = first_arm_length
             .max(second_arm_length)
-            .max(point.x.abs())
-            .max(point.y.abs());
+            .max(point.x().abs())
+            .max(point.y().abs());
 
-        NormalizedGeometry {
-            point: Point {
-                x: point.x / normalize_factor,
-                y: point.y / normalize_factor,
-            },
+        Ok(NormalizedGeometry {
+            point: Point::new(point.x() / normalize_factor, point.y() / normalize_factor)?,
             first_arm_length: first_arm_length / normalize_factor,
             second_arm_length: second_arm_length / normalize_factor,
-        }
+        })
     }
 }

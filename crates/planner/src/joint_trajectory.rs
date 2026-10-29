@@ -22,7 +22,7 @@ impl<'a> JointTrajectory<'a> {
         let trajectory_points = line
             .points(max_point_distance)
             .map_err(PlannerError::Trajectory)?;
-        
+
         Ok(Self {
             scara,
             trajectory_points,

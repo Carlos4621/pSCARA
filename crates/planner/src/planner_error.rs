@@ -6,4 +6,5 @@ pub enum PlannerError {
     Trajectory(TrajectoryError),
     Kinematics(KinematicsError),
     AngleNonFinite,
+    MinGreaterThanMax,
 }

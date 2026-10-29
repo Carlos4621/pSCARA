@@ -62,41 +62,30 @@ fn new_rejects_inverted_finite_limits() {
 }
 
 #[test]
-fn new_orders_infinite_limits_by_the_same_comparison_as_finite_limits() {
-    for (min_angle, max_angle) in [
-        (f64::NEG_INFINITY, f64::NEG_INFINITY),
-        (f64::NEG_INFINITY, 0.0),
-        (f64::NEG_INFINITY, f64::INFINITY),
-        (0.0, f64::INFINITY),
-        (f64::INFINITY, f64::INFINITY),
-    ] {
-        assert_range_preserved(min_angle, max_angle);
-    }
-
-    for (min_angle, max_angle) in [
-        (f64::INFINITY, f64::NEG_INFINITY),
-        (f64::INFINITY, f64::MAX),
-        (-f64::MAX, f64::NEG_INFINITY),
-    ] {
-        assert_eq!(
-            JointRange::new(min_angle, max_angle).unwrap_err(),
-            PlannerError::MinGreaterThanMax
-        );
+fn new_rejects_a_non_finite_minimum_or_maximum() {
+    for invalid in [f64::NEG_INFINITY, f64::INFINITY, f64::NAN, -f64::NAN] {
+        for (min_angle, max_angle) in [(invalid, 0.0), (0.0, invalid), (invalid, invalid)] {
+            assert_eq!(
+                JointRange::new(min_angle, max_angle).unwrap_err(),
+                PlannerError::AngleNonFinite
+            );
+        }
     }
 }
 
 #[test]
-fn new_accepts_nan_limits_because_they_are_unordered() {
+fn non_finite_validation_takes_precedence_over_limit_ordering() {
     for (min_angle, max_angle) in [
-        (f64::NAN, 0.0),
-        (0.0, f64::NAN),
-        (f64::NAN, f64::NAN),
-        (-f64::NAN, f64::NAN),
+        (f64::INFINITY, f64::NEG_INFINITY),
+        (f64::INFINITY, f64::MAX),
+        (-f64::MAX, f64::NEG_INFINITY),
+        (f64::NAN, -f64::MAX),
+        (f64::MAX, f64::NAN),
     ] {
-        let range = JointRange::new(min_angle, max_angle)
-            .expect("NaN does not satisfy the min > max rejection condition");
-        assert_eq!(range.min_angle.to_bits(), min_angle.to_bits());
-        assert_eq!(range.max_angle.to_bits(), max_angle.to_bits());
+        assert_eq!(
+            JointRange::new(min_angle, max_angle).unwrap_err(),
+            PlannerError::AngleNonFinite
+        );
     }
 }
 
@@ -131,39 +120,11 @@ fn contains_does_not_reduce_angles_to_one_turn() {
 fn contains_rejects_every_non_finite_query() {
     for range in [
         JointRange::new(-PI, PI).unwrap(),
-        JointRange::new(f64::NEG_INFINITY, f64::INFINITY).unwrap(),
-        JointRange::new(f64::NAN, f64::NAN).unwrap(),
+        JointRange::new(-f64::MAX, f64::MAX).unwrap(),
+        JointRange::new(0.0, 0.0).unwrap(),
     ] {
         for angle in [f64::NEG_INFINITY, f64::INFINITY, f64::NAN, -f64::NAN] {
             assert_eq!(range.contains(angle), Err(PlannerError::AngleNonFinite));
-        }
-    }
-}
-
-#[test]
-fn contains_supports_infinite_bounds_for_finite_queries() {
-    let unbounded = JointRange::new(f64::NEG_INFINITY, f64::INFINITY).unwrap();
-    for angle in [-f64::MAX, -0.0, 0.0, f64::MAX] {
-        assert_eq!(unbounded.contains(angle), Ok(true));
-    }
-
-    let positive_infinity = JointRange::new(f64::INFINITY, f64::INFINITY).unwrap();
-    let negative_infinity = JointRange::new(f64::NEG_INFINITY, f64::NEG_INFINITY).unwrap();
-    for angle in [-f64::MAX, 0.0, f64::MAX] {
-        assert_eq!(positive_infinity.contains(angle), Ok(false));
-        assert_eq!(negative_infinity.contains(angle), Ok(false));
-    }
-}
-
-#[test]
-fn contains_returns_false_when_either_limit_is_nan() {
-    for range in [
-        JointRange::new(f64::NAN, 1.0).unwrap(),
-        JointRange::new(-1.0, f64::NAN).unwrap(),
-        JointRange::new(f64::NAN, f64::NAN).unwrap(),
-    ] {
-        for angle in [-f64::MAX, -1.0, 0.0, 1.0, f64::MAX] {
-            assert_eq!(range.contains(angle), Ok(false));
         }
     }
 }

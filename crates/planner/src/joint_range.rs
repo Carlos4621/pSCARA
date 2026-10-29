@@ -10,6 +10,10 @@ pub struct JointRange {
 
 impl JointRange {
     pub fn new(min_angle: f64, max_angle: f64) -> Result<Self, PlannerError> {
+        if !min_angle.is_finite() || !max_angle.is_finite() {
+            return Err(PlannerError::AngleNonFinite);
+        }
+
         if min_angle > max_angle {
             return Err(PlannerError::MinGreaterThanMax);
         }

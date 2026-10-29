@@ -2,14 +2,14 @@ pub use kinematics::Point;
 
 use crate::{TrajectoryError, TrajectoryPoints};
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct LineSegment {
     pub start: Point,
     pub end: Point,
 }
 
 impl LineSegment {
-    const MAX_SEGMENTS: usize = usize::MAX;
+    pub const MAX_SEGMENTS: usize = usize::MAX;
 
     pub fn point_at(&self, t: f64) -> Result<Point, TrajectoryError> {
         Self::validate_t(t)?;
@@ -22,28 +22,20 @@ impl LineSegment {
             return Ok(self.end);
         }
 
-        let x = self.start.x + (self.end.x - self.start.x) * t;
-        let y = self.start.y + (self.end.y - self.start.y) * t;
+        let x = self.start.x() + (self.end.x() - self.start.x()) * t;
+        let y = self.start.y() + (self.end.y() - self.start.y()) * t;
 
-        if !x.is_finite() || !y.is_finite() {
-            return Err(TrajectoryError::PointOutOfSegment);
+        match Point::new(x, y) {
+            Ok(point) => Ok(point),
+            Err(_) => Err(TrajectoryError::SegmentNonFinite),
         }
-
-        Ok(Point { x, y })
     }
 
     pub fn length(&self) -> Result<f64, TrajectoryError> {
-        let dx = self.start.x - self.end.x;
-
-        let dy = self.start.y - self.end.y;
-
-        let distance = libm::hypot(dx, dy);
-
-        if !distance.is_finite() {
-            return Err(TrajectoryError::SegmentNonFinite);
+        match self.start.distance_to_point(self.end) {
+            Ok(lenght) => Ok(lenght),
+            Err(_) => Err(TrajectoryError::SegmentNonFinite),
         }
-
-        Ok(distance)
     }
 
     pub fn points(&self, max_point_distance: f64) -> Result<TrajectoryPoints<'_>, TrajectoryError> {

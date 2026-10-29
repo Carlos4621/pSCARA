@@ -3,21 +3,24 @@ use trajectory::{LineSegment, TrajectoryError};
 
 fn segment(start: (f64, f64), end: (f64, f64)) -> LineSegment {
     LineSegment {
-        start: Point {
-            x: start.0,
-            y: start.1,
-        },
-        end: Point { x: end.0, y: end.1 },
+        start: point(start.0, start.1),
+        end: point(end.0, end.1),
     }
+}
+
+fn point(x: f64, y: f64) -> Point {
+    Point::new(x, y).unwrap_or_else(|_| panic!("invalid test point ({x}, {y})"))
 }
 
 fn assert_point_eq(actual: Point, expected: Point) {
     assert_eq!(
-        actual.x, expected.x,
+        actual.x(),
+        expected.x(),
         "x: expected {expected:?}, got {actual:?}"
     );
     assert_eq!(
-        actual.y, expected.y,
+        actual.y(),
+        expected.y(),
         "y: expected {expected:?}, got {actual:?}"
     );
 }
@@ -33,8 +36,8 @@ fn assert_t_out_of_bounds(result: Result<Point, TrajectoryError>) {
     assert!(matches!(result, Err(TrajectoryError::TOutOfBounds)));
 }
 
-fn assert_point_out_of_segment(result: Result<Point, TrajectoryError>) {
-    assert!(matches!(result, Err(TrajectoryError::PointOutOfSegment)));
+fn assert_segment_point_non_finite(result: Result<Point, TrajectoryError>) {
+    assert!(matches!(result, Err(TrajectoryError::SegmentNonFinite)));
 }
 
 fn length(line: &LineSegment) -> f64 {
@@ -115,12 +118,8 @@ fn lenght_uses_scale_safe_hypotenuse_calculation() {
 }
 
 #[test]
-fn lenght_rejects_non_finite_coordinates_and_unrepresentable_distances() {
+fn lenght_rejects_unrepresentable_distances() {
     for line in [
-        segment((f64::NAN, 0.0), (0.0, 0.0)),
-        segment((0.0, f64::NAN), (0.0, 0.0)),
-        segment((f64::NEG_INFINITY, 0.0), (0.0, 0.0)),
-        segment((0.0, f64::INFINITY), (0.0, 0.0)),
         segment((-f64::MAX, 0.0), (f64::MAX, 0.0)),
         segment((0.0, -f64::MAX), (0.0, f64::MAX)),
         segment((0.0, 0.0), (f64::MAX, f64::MAX)),
@@ -142,18 +141,12 @@ fn point_at_matches_known_horizontal_vertical_and_diagonal_points() {
     ] {
         let line = segment(start, end);
         assert_point_eq(point_at(&line, 0.0), line.start);
-        assert_point_eq(
-            point_at(&line, 0.5),
-            Point {
-                x: midpoint.0,
-                y: midpoint.1,
-            },
-        );
+        assert_point_eq(point_at(&line, 0.5), point(midpoint.0, midpoint.1));
         assert_point_eq(point_at(&line, 1.0), line.end);
     }
     let line = segment((4.0, -8.0), (20.0, 24.0));
-    assert_point_eq(point_at(&line, 0.25), Point { x: 8.0, y: 0.0 });
-    assert_point_eq(point_at(&line, 0.75), Point { x: 16.0, y: 16.0 });
+    assert_point_eq(point_at(&line, 0.25), point(8.0, 0.0));
+    assert_point_eq(point_at(&line, 0.75), point(16.0, 16.0));
 }
 
 #[test]
@@ -169,10 +162,10 @@ fn point_at_matches_exact_weighted_points_on_a_coordinate_grid() {
                         // Independent weighted-endpoint oracle.
                         assert_point_eq(
                             point_at(&line, t),
-                            Point {
-                                x: ((16 - step) as f64 * sx + step as f64 * ex) / 16.0,
-                                y: ((16 - step) as f64 * sy + step as f64 * ey) / 16.0,
-                            },
+                            point(
+                                ((16 - step) as f64 * sx + step as f64 * ex) / 16.0,
+                                ((16 - step) as f64 * sy + step as f64 * ey) / 16.0,
+                            ),
                         );
                     }
                 }
@@ -221,7 +214,7 @@ fn point_at_handles_adjacent_floats_at_zero_midpoint_and_one() {
         f64::from_bits(1.0_f64.to_bits() - 1),
         1.0,
     ] {
-        assert_point_eq(point_at(&line, t), Point { x: t, y: -t });
+        assert_point_eq(point_at(&line, t), point(t, -t));
     }
 }
 
@@ -291,12 +284,12 @@ fn point_at_stays_in_the_bounding_box_and_advances_monotonically() {
             let mut previous = point_at(&line, 0.0);
             for step in 0..=256 {
                 let p = point_at(&line, step as f64 / 256.0);
-                assert!((start.min(end)..=start.max(end)).contains(&p.x));
-                assert!((start.min(end)..=start.max(end)).contains(&p.y));
+                assert!((start.min(end)..=start.max(end)).contains(&p.x()));
+                assert!((start.min(end)..=start.max(end)).contains(&p.y()));
                 if end >= start {
-                    assert!(p.x >= previous.x && p.y <= previous.y);
+                    assert!(p.x() >= previous.x() && p.y() <= previous.y());
                 } else {
-                    assert!(p.x <= previous.x && p.y >= previous.y);
+                    assert!(p.x() <= previous.x() && p.y() >= previous.y());
                 }
                 previous = p;
             }
@@ -312,14 +305,8 @@ fn point_at_commutes_with_translation_and_coordinate_swapping() {
     for step in 0..=32 {
         let t = step as f64 / 32.0;
         let p = point_at(&line, t);
-        assert_point_eq(
-            point_at(&translated, t),
-            Point {
-                x: p.x + 128.0,
-                y: p.y - 64.0,
-            },
-        );
-        assert_point_eq(point_at(&swapped, t), Point { x: p.y, y: p.x });
+        assert_point_eq(point_at(&translated, t), point(p.x() + 128.0, p.y() - 64.0));
+        assert_point_eq(point_at(&swapped, t), point(p.y(), p.x()));
     }
 }
 
@@ -333,10 +320,7 @@ fn point_at_scales_over_binary_exponents_without_spurious_error() {
             let coefficient = (step as f64 - 8.0) / 16.0;
             assert_point_eq(
                 point_at(&line, step as f64 / 16.0),
-                Point {
-                    x: coefficient * scale,
-                    y: -coefficient * scale,
-                },
+                point(coefficient * scale, -coefficient * scale),
             );
         }
     }
@@ -350,10 +334,7 @@ fn point_at_interpolates_representable_subnormal_points() {
         let expected = (step as f64 - 16.0) * unit;
         assert_point_eq(
             point_at(&line, step as f64 / 32.0),
-            Point {
-                x: expected,
-                y: -expected,
-            },
+            point(expected, -expected),
         );
     }
 }
@@ -367,10 +348,7 @@ fn point_at_interpolates_neighboring_values_near_the_largest_finite_coordinate()
         let expected = f64::from_bits(last_bits - 8 + step);
         assert_point_eq(
             point_at(&line, step as f64 / 8.0),
-            Point {
-                x: expected,
-                y: -expected,
-            },
+            point(expected, -expected),
         );
     }
 }
@@ -385,10 +363,7 @@ fn point_at_crosses_the_subnormal_to_normal_boundary() {
         let units = (1_u64 << 48) * step;
         assert_point_eq(
             point_at(&line, step as f64 / 32.0),
-            Point {
-                x: f64::from_bits(units),
-                y: f64::from_bits((1_u64 << 53) - units),
-            },
+            point(f64::from_bits(units), f64::from_bits((1_u64 << 53) - units)),
         );
     }
 }
@@ -406,33 +381,6 @@ fn point_at_rejects_nan_parameters_including_on_a_degenerate_segment() {
 }
 
 #[test]
-fn point_at_returns_exact_endpoints_before_checking_their_coordinates() {
-    let line = segment((f64::NAN, f64::NEG_INFINITY), (f64::INFINITY, -f64::NAN));
-
-    let start = point_at(&line, 0.0);
-    assert!(start.x.is_nan());
-    assert_eq!(start.y, f64::NEG_INFINITY);
-
-    let end = point_at(&line, 1.0);
-    assert_eq!(end.x, f64::INFINITY);
-    assert!(end.y.is_nan());
-}
-
-#[test]
-fn point_at_rejects_non_finite_interior_results() {
-    for line in [
-        segment((f64::NAN, 0.0), (8.0, 16.0)),
-        segment((8.0, 0.0), (f64::NAN, 16.0)),
-        segment((0.0, f64::NAN), (16.0, 8.0)),
-        segment((0.0, 8.0), (16.0, f64::NAN)),
-        segment((f64::NEG_INFINITY, 0.0), (8.0, 16.0)),
-        segment((8.0, 0.0), (f64::INFINITY, 16.0)),
-    ] {
-        assert_point_out_of_segment(line.point_at(0.5));
-    }
-}
-
-#[test]
 fn point_at_returns_extreme_finite_endpoints_without_interpolating() {
     let line = segment((-f64::MAX, f64::MAX), (f64::MAX, -f64::MAX));
     assert_point_eq(point_at(&line, 0.0), line.start);
@@ -443,7 +391,7 @@ fn point_at_returns_extreme_finite_endpoints_without_interpolating() {
 fn point_at_reports_overflow_for_interior_points_at_opposite_finite_extremes() {
     let line = segment((-f64::MAX, f64::MAX), (f64::MAX, -f64::MAX));
     for t in [0.25, 0.5, 0.75] {
-        assert_point_out_of_segment(line.point_at(t));
+        assert_segment_point_non_finite(line.point_at(t));
     }
 }
 

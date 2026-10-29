@@ -1,23 +1,26 @@
 use kinematics::Point;
-use trajectory::{LineSegment, TrajectoryError};
+use trajectory::{LineSegment, TrajectoryError, TrajectoryPoints};
 
 fn segment(start: (f64, f64), end: (f64, f64)) -> LineSegment {
     LineSegment {
-        start: Point {
-            x: start.0,
-            y: start.1,
-        },
-        end: Point { x: end.0, y: end.1 },
+        start: point(start.0, start.1),
+        end: point(end.0, end.1),
     }
+}
+
+fn point(x: f64, y: f64) -> Point {
+    Point::new(x, y).unwrap_or_else(|_| panic!("invalid test point ({x}, {y})"))
 }
 
 fn assert_point_eq(actual: Point, expected: Point) {
     assert_eq!(
-        actual.x, expected.x,
+        actual.x(),
+        expected.x(),
         "x: expected {expected:?}, got {actual:?}"
     );
     assert_eq!(
-        actual.y, expected.y,
+        actual.y(),
+        expected.y(),
         "y: expected {expected:?}, got {actual:?}"
     );
 }
@@ -37,7 +40,7 @@ fn collect_points(line: &LineSegment, max_point_distance: f64) -> Vec<Point> {
 }
 
 fn distance(a: Point, b: Point) -> f64 {
-    libm::hypot(a.x - b.x, a.y - b.y)
+    libm::hypot(a.x() - b.x(), a.y() - b.y())
 }
 
 #[test]
@@ -51,14 +54,8 @@ fn points_matches_known_exact_sequences() {
     ] {
         let actual = collect_points(&segment(start, end), maximum);
         assert_eq!(actual.len(), expected_x.len());
-        for (point, expected_x) in actual.into_iter().zip(expected_x) {
-            assert_point_eq(
-                point,
-                Point {
-                    x: expected_x,
-                    y: 0.0,
-                },
-            );
+        for (actual_point, expected_x) in actual.into_iter().zip(expected_x) {
+            assert_point_eq(actual_point, point(expected_x, 0.0));
         }
     }
 }
@@ -131,10 +128,8 @@ fn points_rejects_every_non_positive_or_non_finite_maximum_distance() {
 }
 
 #[test]
-fn points_propagates_invalid_segment_lengths_before_constructing_an_iterator() {
+fn points_propagates_unrepresentable_segment_lengths_before_constructing_an_iterator() {
     for line in [
-        segment((f64::NAN, 0.0), (0.0, 0.0)),
-        segment((0.0, f64::INFINITY), (0.0, 0.0)),
         segment((-f64::MAX, 0.0), (f64::MAX, 0.0)),
         segment((0.0, 0.0), (f64::MAX, f64::MAX)),
     ] {
@@ -197,14 +192,8 @@ fn points_handles_subnormal_and_largest_finite_representable_scales() {
     let subnormal = segment((0.0, 0.0), (4.0 * unit, 0.0));
     let actual = collect_points(&subnormal, unit);
     assert_eq!(actual.len(), 5);
-    for (index, point) in actual.into_iter().enumerate() {
-        assert_point_eq(
-            point,
-            Point {
-                x: index as f64 * unit,
-                y: 0.0,
-            },
-        );
+    for (index, actual_point) in actual.into_iter().enumerate() {
+        assert_point_eq(actual_point, point(index as f64 * unit, 0.0));
     }
 
     let largest = segment((0.0, 0.0), (f64::MAX, 0.0));
@@ -274,4 +263,52 @@ fn points_rejects_requested_resolutions_that_cannot_fit_in_usize() {
             Err(TrajectoryError::TooManySegments)
         ));
     }
+}
+
+#[test]
+fn public_constructor_iterates_the_requested_number_of_intervals() {
+    let line = segment((-8.0, 4.0), (8.0, -4.0));
+    let actual: Vec<_> = TrajectoryPoints::new(&line, 4)
+        .map(|result| result.unwrap_or_else(|_| panic!("valid point rejected")))
+        .collect();
+    let expected = [
+        point(-8.0, 4.0),
+        point(-4.0, 2.0),
+        point(0.0, 0.0),
+        point(4.0, -2.0),
+        point(8.0, -4.0),
+    ];
+
+    assert_eq!(actual.len(), expected.len());
+    for (actual, expected) in actual.into_iter().zip(expected) {
+        assert_point_eq(actual, expected);
+    }
+}
+
+#[test]
+fn public_constructor_with_zero_max_index_yields_only_the_end() {
+    let line = segment((-8.0, 4.0), (8.0, -4.0));
+    let mut points = TrajectoryPoints::new(&line, 0);
+
+    assert_point_eq(
+        points
+            .next()
+            .unwrap()
+            .unwrap_or_else(|_| panic!("end rejected")),
+        line.end,
+    );
+    assert!(points.next().is_none());
+}
+
+#[test]
+fn get_segment_returns_the_borrowed_segment() {
+    let line = segment((-3.0, 7.0), (11.0, -13.0));
+    let points = TrajectoryPoints::new(&line, 3);
+
+    assert!(core::ptr::eq(points.get_segment(), &line));
+}
+
+#[test]
+fn max_segments_matches_the_largest_representable_index() {
+    assert_eq!(LineSegment::MAX_SEGMENTS, usize::MAX);
 }

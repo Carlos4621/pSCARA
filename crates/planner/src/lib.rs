@@ -8,3 +8,6 @@ pub use joint_trajectory::JointTrajectory;
 
 mod joint_range;
 pub use joint_range::JointRange;
+
+mod joint_limits;
+pub use joint_limits::JointLimits;

@@ -2,7 +2,7 @@ use core::f64;
 
 use crate::PlannerError;
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct JointRange {
     min_angle: f64,
     max_angle: f64,

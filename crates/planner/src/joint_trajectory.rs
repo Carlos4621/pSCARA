@@ -1,7 +1,7 @@
 use kinematics::{ElbowConfiguration, JointAngles, Scara};
 use trajectory::{LineSegment, TrajectoryPoints};
 
-use crate::PlannerError;
+use crate::{JointLimits, PlannerError};
 
 #[derive(Debug)]
 pub struct JointTrajectory<'a> {
@@ -10,6 +10,7 @@ pub struct JointTrajectory<'a> {
     configuration: ElbowConfiguration,
     is_finished: bool,
     previous_angle: Option<JointAngles>,
+    limits: Option<&'a JointLimits>,
 }
 
 impl<'a> JointTrajectory<'a> {
@@ -29,7 +30,13 @@ impl<'a> JointTrajectory<'a> {
             configuration,
             is_finished: false,
             previous_angle: None,
+            limits: None,
         })
+    }
+
+    pub fn with_limits(mut self, joint_limits: &'a JointLimits) -> Self {
+        self.limits = Some(joint_limits);
+        self
     }
 
     fn unwrap_angle(previous: f64, next: f64) -> Result<f64, PlannerError> {
@@ -55,6 +62,19 @@ impl<'a> JointTrajectory<'a> {
             second_theta: Self::unwrap_angle(previous.second_theta, next.second_theta)?,
         })
     }
+
+    fn validate_limits(&self, angle: JointAngles) -> Result<JointAngles, PlannerError> {
+        let in_range = match self.limits {
+            Some(limits) => limits.contains(angle),
+            None => return Ok(angle),
+        }?;
+
+        if !in_range {
+            return Err(PlannerError::AngleOutOfLimits);
+        }
+
+        Ok(angle)
+    }
 }
 
 impl<'a> Iterator for JointTrajectory<'a> {
@@ -78,6 +98,7 @@ impl<'a> Iterator for JointTrajectory<'a> {
                     Some(previous) => Self::unwrap_joint_angles(previous, next),
                     None => Ok(next),
                 })
+                .and_then(|angle| self.validate_limits(angle))
         });
 
         match result {

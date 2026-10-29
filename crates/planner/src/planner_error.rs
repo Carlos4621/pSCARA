@@ -7,4 +7,5 @@ pub enum PlannerError {
     Kinematics(KinematicsError),
     AngleNonFinite,
     MinGreaterThanMax,
+    AngleOutOfLimits,
 }

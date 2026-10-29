@@ -1,7 +1,7 @@
 use core::f64::consts::{FRAC_PI_2, PI};
 
 use kinematics::{ElbowConfiguration, JointAngles, KinematicsError, Point, Scara};
-use planner::{JointTrajectory, PlannerError};
+use planner::{JointLimits, JointRange, JointTrajectory, PlannerError};
 use trajectory::{LineSegment, TrajectoryError};
 
 const ANGLE_TOLERANCE: f64 = 1e-10;
@@ -18,6 +18,21 @@ fn line(start: (f64, f64), end: (f64, f64)) -> LineSegment {
 
 fn configurations() -> [ElbowConfiguration; 2] {
     [ElbowConfiguration::Positive, ElbowConfiguration::Negative]
+}
+
+fn limits(first_min: f64, first_max: f64, second_min: f64, second_max: f64) -> JointLimits {
+    JointLimits::new(
+        JointRange::new(first_min, first_max).expect("first joint range should be valid"),
+        JointRange::new(second_min, second_max).expect("second joint range should be valid"),
+    )
+}
+
+fn assert_angles_exact(actual: JointAngles, expected: JointAngles) {
+    assert_eq!(actual.first_theta.to_bits(), expected.first_theta.to_bits());
+    assert_eq!(
+        actual.second_theta.to_bits(),
+        expected.second_theta.to_bits()
+    );
 }
 
 fn assert_point_close(actual: Point, expected: Point, scale: f64) {
@@ -370,5 +385,208 @@ fn cartesian_to_joint_composition_is_stable_across_finite_scales() {
                 assert_point_close(recovered, expected_point, scale);
             }
         }
+    }
+}
+
+#[test]
+fn with_limits_accepts_the_same_trajectory_when_every_sample_is_in_range() {
+    let robot = Scara::new(100.0, 60.0).unwrap();
+    let path = line((40.0, 0.0), (160.0, 0.0));
+    let maximum = 7.0;
+
+    for configuration in configurations() {
+        let expected: Vec<_> = JointTrajectory::new(&robot, &path, maximum, configuration)
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        let first_min = expected
+            .iter()
+            .map(|angles| angles.first_theta)
+            .fold(f64::INFINITY, f64::min);
+        let first_max = expected
+            .iter()
+            .map(|angles| angles.first_theta)
+            .fold(f64::NEG_INFINITY, f64::max);
+        let second_min = expected
+            .iter()
+            .map(|angles| angles.second_theta)
+            .fold(f64::INFINITY, f64::min);
+        let second_max = expected
+            .iter()
+            .map(|angles| angles.second_theta)
+            .fold(f64::NEG_INFINITY, f64::max);
+        let joint_limits = limits(first_min, first_max, second_min, second_max);
+
+        let actual: Vec<_> = JointTrajectory::new(&robot, &path, maximum, configuration)
+            .unwrap()
+            .with_limits(&joint_limits)
+            .map(Result::unwrap)
+            .collect();
+
+        assert_eq!(actual.len(), expected.len());
+        for (actual, expected) in actual.into_iter().zip(expected) {
+            assert_angles_exact(actual, expected);
+        }
+    }
+}
+
+#[test]
+fn with_limits_rejects_either_joint_on_the_first_sample_and_then_stays_finished() {
+    let robot = Scara::new(100.0, 60.0).unwrap();
+    let configuration = ElbowConfiguration::Positive;
+    let expected = JointAngles {
+        first_theta: 0.4,
+        second_theta: 0.8,
+    };
+    let point = robot.forward(expected);
+    let path = LineSegment {
+        start: point,
+        end: point,
+    };
+    let solved = robot.inverse(point, configuration).unwrap();
+    let rejected_limits = [
+        limits(
+            solved.first_theta + 0.25,
+            solved.first_theta + 0.5,
+            -f64::MAX,
+            f64::MAX,
+        ),
+        limits(
+            -f64::MAX,
+            f64::MAX,
+            solved.second_theta + 0.25,
+            solved.second_theta + 0.5,
+        ),
+    ];
+
+    for joint_limits in &rejected_limits {
+        let mut trajectory = JointTrajectory::new(&robot, &path, f64::MAX, configuration).unwrap();
+        trajectory = trajectory.with_limits(joint_limits);
+
+        assert_next_error(trajectory.next(), PlannerError::AngleOutOfLimits);
+        assert!(trajectory.next().is_none());
+        assert!(trajectory.next().is_none());
+    }
+}
+
+#[test]
+fn with_limits_returns_the_accepted_prefix_then_stops_at_the_first_violation() {
+    let robot = Scara::new(100.0, 60.0).unwrap();
+    let path = line((160.0, 0.0), (40.0, 0.0));
+    let joint_limits = limits(0.0, 0.0, 0.0, 0.0);
+
+    for configuration in configurations() {
+        let mut trajectory = JointTrajectory::new(&robot, &path, 20.0, configuration)
+            .unwrap()
+            .with_limits(&joint_limits);
+        let expected = robot.inverse(path.start, configuration).unwrap();
+
+        assert_angles_exact(unwrap_angles(trajectory.next()), expected);
+        assert_next_error(trajectory.next(), PlannerError::AngleOutOfLimits);
+        assert!(trajectory.next().is_none());
+        assert!(trajectory.next().is_none());
+    }
+}
+
+#[test]
+fn the_last_with_limits_call_replaces_the_previous_limits() {
+    let robot = Scara::new(100.0, 60.0).unwrap();
+    let path = line((160.0, 0.0), (160.0, 0.0));
+    let allowed = limits(0.0, 0.0, 0.0, 0.0);
+    let rejected = limits(1.0, 2.0, 1.0, 2.0);
+
+    let mut allowed_last =
+        JointTrajectory::new(&robot, &path, f64::MAX, ElbowConfiguration::Positive)
+            .unwrap()
+            .with_limits(&rejected)
+            .with_limits(&allowed);
+    assert_angles_exact(
+        unwrap_angles(allowed_last.next()),
+        JointAngles {
+            first_theta: 0.0,
+            second_theta: 0.0,
+        },
+    );
+
+    let mut rejected_last =
+        JointTrajectory::new(&robot, &path, f64::MAX, ElbowConfiguration::Positive)
+            .unwrap()
+            .with_limits(&allowed)
+            .with_limits(&rejected);
+    assert_next_error(rejected_last.next(), PlannerError::AngleOutOfLimits);
+}
+
+#[test]
+fn with_limits_validates_unwrapped_angles_across_the_pi_branch_cut() {
+    let robot = Scara::new(100.0, 60.0).unwrap();
+    let path = line((-100.0, 1.0), (-100.0, -1.0));
+    let maximum = 0.25;
+
+    for configuration in configurations() {
+        let expected: Vec<_> = JointTrajectory::new(&robot, &path, maximum, configuration)
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        let raw: Vec<_> = path
+            .points(maximum)
+            .unwrap()
+            .map(|point| robot.inverse(point.unwrap(), configuration).unwrap())
+            .collect();
+        let first_min = expected
+            .iter()
+            .map(|angles| angles.first_theta)
+            .fold(f64::INFINITY, f64::min);
+        let first_max = expected
+            .iter()
+            .map(|angles| angles.first_theta)
+            .fold(f64::NEG_INFINITY, f64::max);
+        let second_min = expected
+            .iter()
+            .map(|angles| angles.second_theta)
+            .fold(f64::INFINITY, f64::min);
+        let second_max = expected
+            .iter()
+            .map(|angles| angles.second_theta)
+            .fold(f64::NEG_INFINITY, f64::max);
+        let first_range = JointRange::new(first_min, first_max).unwrap();
+        assert!(
+            raw.iter()
+                .any(|angles| first_range.contains(angles.first_theta) == Ok(false))
+        );
+        let joint_limits = JointLimits::new(
+            first_range,
+            JointRange::new(second_min, second_max).unwrap(),
+        );
+
+        let actual: Vec<_> = JointTrajectory::new(&robot, &path, maximum, configuration)
+            .unwrap()
+            .with_limits(&joint_limits)
+            .map(Result::unwrap)
+            .collect();
+
+        assert_eq!(actual.len(), expected.len());
+        for (actual, expected) in actual.into_iter().zip(expected) {
+            assert_angles_exact(actual, expected);
+        }
+    }
+}
+
+#[test]
+fn with_limits_preserves_kinematics_error_precedence_and_finishes_the_iterator() {
+    let robot = Scara::new(100.0, 60.0).unwrap();
+    let path = line((0.0, 0.0), (160.0, 0.0));
+    let restrictive_limits = limits(0.0, 0.0, 0.0, 0.0);
+
+    for configuration in configurations() {
+        let mut trajectory = JointTrajectory::new(&robot, &path, 20.0, configuration)
+            .unwrap()
+            .with_limits(&restrictive_limits);
+
+        assert_next_error(
+            trajectory.next(),
+            PlannerError::Kinematics(KinematicsError::UnreachablePoint),
+        );
+        assert!(trajectory.next().is_none());
+        assert!(trajectory.next().is_none());
     }
 }

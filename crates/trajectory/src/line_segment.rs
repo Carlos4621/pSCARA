@@ -25,17 +25,11 @@ impl LineSegment {
         let x = self.start.x() + (self.end.x() - self.start.x()) * t;
         let y = self.start.y() + (self.end.y() - self.start.y()) * t;
 
-        match Point::new(x, y) {
-            Ok(point) => Ok(point),
-            Err(_) => Err(TrajectoryError::SegmentNonFinite),
-        }
+        Point::new(x, y).map_err(|_| TrajectoryError::SegmentNonFinite)
     }
 
     pub fn length(&self) -> Result<f64, TrajectoryError> {
-        match self.start.distance_to_point(self.end) {
-            Ok(lenght) => Ok(lenght),
-            Err(_) => Err(TrajectoryError::SegmentNonFinite),
-        }
+        self.start.distance_to_point(self.end).map_err(|_| TrajectoryError::SegmentNonFinite)
     }
 
     pub fn points(&self, max_point_distance: f64) -> Result<TrajectoryPoints<'_>, TrajectoryError> {
@@ -47,27 +41,31 @@ impl LineSegment {
 
         let mut segments = libm::ceil(length / max_point_distance).max(1.0);
 
-        if !segments.is_finite() || segments >= Self::MAX_SEGMENTS as f64 {
-            return Err(TrajectoryError::TooManySegments);
-        }
+        Self::validate_segments_number(segments)?;
 
         // Corregir un posible redondeo hacia abajo.
         if segments * max_point_distance < length {
             segments += 1.0;
         }
 
-        if !segments.is_finite() || segments >= Self::MAX_SEGMENTS as f64 {
-            return Err(TrajectoryError::TooManySegments);
-        }
+        Self::validate_segments_number(segments)?;
 
         Ok(TrajectoryPoints::new(self, segments as usize))
     }
 
-    fn validate_t(t: f64) -> Result<f64, TrajectoryError> {
+    fn validate_t(t: f64) -> Result<(), TrajectoryError> {
         if !t.is_finite() || !(0.0..=1.0).contains(&t) {
             return Err(TrajectoryError::TOutOfBounds);
         }
 
-        Ok(t)
+        Ok(())
+    }
+
+    fn validate_segments_number(segments: f64) -> Result<(), TrajectoryError> {
+        if !segments.is_finite() || segments >= Self::MAX_SEGMENTS as f64 {
+            return Err(TrajectoryError::TooManySegments);
+        }
+
+        Ok(())
     }
 }

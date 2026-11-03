@@ -11,6 +11,7 @@ pub struct JointTrajectory<'a> {
     is_finished: bool,
     previous_angle: Option<JointAngles>,
     limits: Option<&'a JointLimits>,
+    has_started: bool,
 }
 
 impl<'a> JointTrajectory<'a> {
@@ -31,12 +32,15 @@ impl<'a> JointTrajectory<'a> {
             is_finished: false,
             previous_angle: None,
             limits: None,
+            has_started: false,
         })
     }
 
     pub fn with_limits(mut self, joint_limits: &'a JointLimits) -> Result<Self, PlannerError> {
-        if let Some(previus) = self.previous_angle && !joint_limits.contains(previus)? {
-                return Err(PlannerError::AngleOutOfLimits);
+        if let Some(previus) = self.previous_angle
+            && !joint_limits.contains(previus)?
+        {
+            return Err(PlannerError::AngleOutOfLimits);
         }
 
         self.limits = Some(joint_limits);
@@ -89,6 +93,10 @@ impl<'a> JointTrajectory<'a> {
     }
 
     pub fn validate(self) -> Result<(), PlannerError> {
+        if self.has_started {
+            return Err(PlannerError::TrajectoryAlreadyStarted);
+        }
+
         for n in self {
             n?;
         }
@@ -139,6 +147,10 @@ impl<'a> Iterator for JointTrajectory<'a> {
     type Item = Result<JointAngles, PlannerError>;
 
     fn next(&mut self) -> Option<Self::Item> {
+        if !self.has_started {
+            self.has_started = true;
+        }
+
         if self.is_finished {
             return None;
         }

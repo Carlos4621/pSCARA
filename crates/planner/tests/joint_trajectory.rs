@@ -973,12 +973,63 @@ fn validate_detects_an_unreachable_interior_point_after_a_valid_prefix() {
     let path = line((-160.0, 0.0), (160.0, 0.0));
 
     for configuration in configurations() {
+        assert_eq!(
+            JointTrajectory::new(&robot, &path, 20.0, configuration)
+                .unwrap()
+                .validate(),
+            Err(PlannerError::Kinematics(KinematicsError::UnreachablePoint))
+        );
+    }
+}
+
+#[test]
+fn validate_rejects_a_trajectory_after_a_successful_next_call() {
+    let robot = Scara::new(100.0, 60.0).unwrap();
+    let path = line((160.0, 0.0), (40.0, 0.0));
+
+    for configuration in configurations() {
         let mut trajectory = JointTrajectory::new(&robot, &path, 20.0, configuration).unwrap();
         assert!(matches!(trajectory.next(), Some(Ok(_))));
 
         assert_eq!(
             trajectory.validate(),
-            Err(PlannerError::Kinematics(KinematicsError::UnreachablePoint))
+            Err(PlannerError::TrajectoryAlreadyStarted)
+        );
+    }
+}
+
+#[test]
+fn validate_rejects_a_trajectory_after_an_error_was_observed() {
+    let robot = Scara::new(100.0, 60.0).unwrap();
+    let path = line((0.0, 0.0), (160.0, 0.0));
+
+    for configuration in configurations() {
+        let mut trajectory = JointTrajectory::new(&robot, &path, 20.0, configuration).unwrap();
+        assert_next_error(
+            trajectory.next(),
+            PlannerError::Kinematics(KinematicsError::UnreachablePoint),
+        );
+
+        assert_eq!(
+            trajectory.validate(),
+            Err(PlannerError::TrajectoryAlreadyStarted)
+        );
+    }
+}
+
+#[test]
+fn validate_rejects_a_fully_consumed_trajectory() {
+    let robot = Scara::new(100.0, 60.0).unwrap();
+    let path = line((160.0, 0.0), (160.0, 0.0));
+
+    for configuration in configurations() {
+        let mut trajectory = JointTrajectory::new(&robot, &path, f64::MAX, configuration).unwrap();
+        assert_eq!(trajectory.by_ref().count(), 2);
+        assert!(trajectory.next().is_none());
+
+        assert_eq!(
+            trajectory.validate(),
+            Err(PlannerError::TrajectoryAlreadyStarted)
         );
     }
 }

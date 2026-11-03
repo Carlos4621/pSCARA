@@ -2,7 +2,7 @@ use crate::LineSegment;
 use crate::TrajectoryError;
 use kinematics::Point;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TrajectoryPoints<'a> {
     segment: &'a LineSegment,
     actual_index: usize,

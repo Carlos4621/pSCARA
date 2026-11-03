@@ -11,3 +11,6 @@ pub use joint_range::JointRange;
 
 mod joint_limits;
 pub use joint_limits::JointLimits;
+
+mod validated_trajectory;
+pub use validated_trajectory::ValidatedTrajectory;

@@ -1,7 +1,7 @@
 use core::f64::consts::{FRAC_PI_2, PI};
 
 use kinematics::{ElbowConfiguration, JointAngles, KinematicsError, Point, Scara};
-use planner::{JointLimits, JointRange, JointTrajectory, PlannerError};
+use planner::{JointLimits, JointRange, JointTrajectory, PlannerError, ValidatedTrajectory};
 use trajectory::{LineSegment, TrajectoryError};
 
 const ANGLE_TOLERANCE: f64 = 1e-10;
@@ -1102,6 +1102,171 @@ fn validate_accepts_noncanonical_initial_turns_with_matching_limits() {
                 .unwrap()
                 .validate(),
             Ok(())
+        );
+    }
+}
+
+#[test]
+fn into_validated_returns_the_complete_original_trajectory_for_both_configurations() {
+    let robot = Scara::new(100.0, 60.0).unwrap();
+    let path = line((40.0, 0.0), (160.0, 0.0));
+    let maximum = 7.0;
+
+    for configuration in configurations() {
+        let expected: Vec<_> = JointTrajectory::new(&robot, &path, maximum, configuration)
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        let mut validated = JointTrajectory::new(&robot, &path, maximum, configuration)
+            .unwrap()
+            .into_validated()
+            .unwrap();
+
+        let _: &ValidatedTrajectory<'_> = &validated;
+        let actual: Vec<_> = validated.by_ref().map(Result::unwrap).collect();
+
+        assert_eq!(actual.len(), expected.len());
+        for (actual, expected) in actual.into_iter().zip(expected) {
+            assert_angles_exact(actual, expected);
+        }
+        assert!(validated.next().is_none());
+        assert!(validated.next().is_none());
+    }
+}
+
+#[test]
+fn into_validated_preserves_initial_position_unwrapping_and_limits() {
+    let robot = Scara::new(100.0, 60.0).unwrap();
+    let path = line((-100.0, 0.0), (-100.0, -1.0));
+
+    for configuration in configurations() {
+        let canonical = robot.inverse(path.start, configuration).unwrap();
+        let initial = angles(
+            canonical.first_theta() + core::f64::consts::TAU,
+            canonical.second_theta() - core::f64::consts::TAU,
+        );
+        let matching_limits = limits(
+            initial.first_theta() - 0.1,
+            initial.first_theta() + 0.1,
+            initial.second_theta() - 0.1,
+            initial.second_theta() + 0.1,
+        );
+
+        let actual: Vec<_> = JointTrajectory::new(&robot, &path, 0.25, configuration)
+            .unwrap()
+            .with_initial_position(initial, 1e-10, 1e-10)
+            .unwrap()
+            .with_limits(&matching_limits)
+            .unwrap()
+            .into_validated()
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+
+        assert!(!actual.is_empty());
+        assert!(
+            actual
+                .iter()
+                .all(|angles| matching_limits.contains(*angles) == Ok(true))
+        );
+        assert!(actual.iter().all(|angles| {
+            angles.first_theta() > core::f64::consts::PI
+                && angles.second_theta().abs() > core::f64::consts::PI
+        }));
+    }
+}
+
+#[test]
+fn into_validated_preserves_unreachable_point_errors() {
+    let robot = Scara::new(100.0, 60.0).unwrap();
+
+    for path in [
+        line((0.0, 0.0), (160.0, 0.0)),
+        line((-160.0, 0.0), (160.0, 0.0)),
+    ] {
+        for configuration in configurations() {
+            assert_eq!(
+                JointTrajectory::new(&robot, &path, 20.0, configuration)
+                    .unwrap()
+                    .into_validated()
+                    .unwrap_err(),
+                PlannerError::Kinematics(KinematicsError::UnreachablePoint)
+            );
+        }
+    }
+}
+
+#[test]
+fn into_validated_preserves_numerical_and_limit_errors() {
+    let smallest_length = f64::from_bits(1);
+    let largest_length = f64::MAX;
+
+    for (first_arm_length, second_arm_length) in [
+        (smallest_length, largest_length),
+        (largest_length, smallest_length),
+    ] {
+        let robot = Scara::new(first_arm_length, second_arm_length).unwrap();
+        let path = line((largest_length, 0.0), (largest_length, 0.0));
+
+        for configuration in configurations() {
+            assert_eq!(
+                JointTrajectory::new(&robot, &path, f64::MAX, configuration)
+                    .unwrap()
+                    .into_validated()
+                    .unwrap_err(),
+                PlannerError::Kinematics(KinematicsError::NumericalFailure)
+            );
+        }
+    }
+
+    let robot = Scara::new(100.0, 60.0).unwrap();
+    let path = line((160.0, 0.0), (40.0, 0.0));
+    let restrictive_limits = limits(0.0, 0.0, 0.0, 0.0);
+
+    for configuration in configurations() {
+        assert_eq!(
+            JointTrajectory::new(&robot, &path, 20.0, configuration)
+                .unwrap()
+                .with_limits(&restrictive_limits)
+                .unwrap()
+                .into_validated()
+                .unwrap_err(),
+            PlannerError::AngleOutOfLimits
+        );
+    }
+}
+
+#[test]
+fn into_validated_rejects_any_trajectory_that_has_already_started() {
+    let robot = Scara::new(100.0, 60.0).unwrap();
+    let path = line((160.0, 0.0), (40.0, 0.0));
+
+    for configuration in configurations() {
+        let mut partially_consumed =
+            JointTrajectory::new(&robot, &path, 20.0, configuration).unwrap();
+        assert!(matches!(partially_consumed.next(), Some(Ok(_))));
+        assert_eq!(
+            partially_consumed.into_validated().unwrap_err(),
+            PlannerError::TrajectoryAlreadyStarted
+        );
+
+        let mut fully_consumed = JointTrajectory::new(&robot, &path, 20.0, configuration).unwrap();
+        assert!(fully_consumed.by_ref().all(|result| result.is_ok()));
+        assert_eq!(
+            fully_consumed.into_validated().unwrap_err(),
+            PlannerError::TrajectoryAlreadyStarted
+        );
+
+        let unreachable_path = line((0.0, 0.0), (160.0, 0.0));
+        let mut failed =
+            JointTrajectory::new(&robot, &unreachable_path, 20.0, configuration).unwrap();
+        assert_next_error(
+            failed.next(),
+            PlannerError::Kinematics(KinematicsError::UnreachablePoint),
+        );
+        assert_eq!(
+            failed.into_validated().unwrap_err(),
+            PlannerError::TrajectoryAlreadyStarted
         );
     }
 }

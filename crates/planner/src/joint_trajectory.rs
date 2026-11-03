@@ -1,9 +1,9 @@
 use kinematics::{ElbowConfiguration, JointAngles, Scara};
 use trajectory::{LineSegment, TrajectoryPoints};
 
-use crate::{JointLimits, PlannerError};
+use crate::{JointLimits, PlannerError, ValidatedTrajectory};
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct JointTrajectory<'a> {
     scara: &'a Scara,
     trajectory_points: TrajectoryPoints<'a>,
@@ -102,6 +102,12 @@ impl<'a> JointTrajectory<'a> {
         }
 
         Ok(())
+    }
+
+    pub fn into_validated(self) -> Result<ValidatedTrajectory<'a>, PlannerError> {
+        self.clone().validate()?;
+
+        Ok(ValidatedTrajectory::new(self))
     }
 
     fn unwrap_angle(previous: f64, next: f64) -> Result<f64, PlannerError> {

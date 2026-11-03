@@ -14,6 +14,10 @@ fn unwrap_angle(actual: f64, next: f64) -> f64 {
     JointTrajectory::unwrap_angle(actual, next).expect("finite angles should unwrap")
 }
 
+fn angles(first_theta: f64, second_theta: f64) -> JointAngles {
+    JointAngles::new(first_theta, second_theta).expect("test angles should be finite")
+}
+
 #[test]
 fn unwrap_angle_keeps_values_that_already_use_the_nearest_turn() {
     for (actual, next) in [
@@ -107,46 +111,10 @@ fn unwrap_angle_rejects_a_non_finite_difference_between_finite_operands() {
 #[test]
 fn unwrap_joint_angles_unwraps_both_joints_independently() {
     let margin = 0.125;
-    let actual = JointAngles {
-        first_theta: PI - margin,
-        second_theta: -PI + margin,
-    };
-    let next = JointAngles {
-        first_theta: -PI + margin,
-        second_theta: PI - margin,
-    };
+    let actual = angles(PI - margin, -PI + margin);
+    let next = angles(-PI + margin, PI - margin);
 
     let result = JointTrajectory::unwrap_joint_angles(actual, next).unwrap();
-    assert_close(result.first_theta, PI + margin);
-    assert_close(result.second_theta, -PI - margin);
-}
-
-#[test]
-fn unwrap_joint_angles_rejects_non_finite_components_in_either_sample() {
-    let finite = JointAngles {
-        first_theta: 0.25,
-        second_theta: -0.5,
-    };
-
-    for invalid in [f64::NEG_INFINITY, f64::INFINITY, f64::NAN] {
-        for invalid_angles in [
-            JointAngles {
-                first_theta: invalid,
-                second_theta: finite.second_theta,
-            },
-            JointAngles {
-                first_theta: finite.first_theta,
-                second_theta: invalid,
-            },
-        ] {
-            assert!(matches!(
-                JointTrajectory::unwrap_joint_angles(invalid_angles, finite),
-                Err(PlannerError::AngleNonFinite)
-            ));
-            assert!(matches!(
-                JointTrajectory::unwrap_joint_angles(finite, invalid_angles),
-                Err(PlannerError::AngleNonFinite)
-            ));
-        }
-    }
+    assert_close(result.first_theta(), PI + margin);
+    assert_close(result.second_theta(), -PI - margin);
 }

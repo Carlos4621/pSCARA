@@ -29,7 +29,9 @@ impl LineSegment {
     }
 
     pub fn length(&self) -> Result<f64, TrajectoryError> {
-        self.start.distance_to_point(self.end).map_err(|_| TrajectoryError::SegmentNonFinite)
+        self.start
+            .distance_to_point(self.end)
+            .map_err(|_| TrajectoryError::SegmentNonFinite)
     }
 
     pub fn points(&self, max_point_distance: f64) -> Result<TrajectoryPoints<'_>, TrajectoryError> {

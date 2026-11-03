@@ -5,4 +5,5 @@ pub enum KinematicsError {
     InvalidPoint,
     NumericalFailure,
     InvalidAngle,
+    InvalidTolerance,
 }

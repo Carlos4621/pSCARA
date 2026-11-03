@@ -39,6 +39,28 @@ impl<'a> JointTrajectory<'a> {
         self
     }
 
+    pub fn with_initial_position(
+        mut self,
+        initial_position: JointAngles,
+        max_tolerance: f64,
+    ) -> Result<Self, PlannerError> {
+        self.previous_angle = Some(self.validate_limits(initial_position)?);
+
+        let initial_position_point = self
+            .scara
+            .forward(initial_position)
+            .map_err(PlannerError::Kinematics)?;
+
+        if !initial_position_point
+            .is_close_to_point(self.trajectory_points.get_segment().start, max_tolerance)
+            .map_err(PlannerError::Kinematics)?
+        {
+            return Err(PlannerError::InitialPositionNotInStart);
+        }
+
+        Ok(self)
+    }
+
     fn unwrap_angle(previous: f64, next: f64) -> Result<f64, PlannerError> {
         if !previous.is_finite() || !next.is_finite() {
             return Err(PlannerError::AngleNonFinite);
@@ -57,10 +79,11 @@ impl<'a> JointTrajectory<'a> {
         previous: JointAngles,
         next: JointAngles,
     ) -> Result<JointAngles, PlannerError> {
-        Ok(JointAngles {
-            first_theta: Self::unwrap_angle(previous.first_theta, next.first_theta)?,
-            second_theta: Self::unwrap_angle(previous.second_theta, next.second_theta)?,
-        })
+        JointAngles::new(
+            Self::unwrap_angle(previous.first_theta(), next.first_theta())?,
+            Self::unwrap_angle(previous.second_theta(), next.second_theta())?,
+        )
+        .map_err(PlannerError::Kinematics)
     }
 
     fn validate_limits(&self, angle: JointAngles) -> Result<JointAngles, PlannerError> {

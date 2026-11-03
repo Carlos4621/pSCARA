@@ -179,6 +179,64 @@ mod tests {
     }
 
     #[test]
+    fn point_closeness_uses_inclusive_euclidean_distance() {
+        let origin = point(0.0, 0.0);
+        let three_four_five = point(3.0, 4.0);
+
+        for zero in [0.0, -0.0] {
+            assert_eq!(origin.is_close_to_point(origin, zero), Ok(true));
+        }
+        assert_eq!(
+            origin.is_close_to_point(origin, f64::from_bits(1)),
+            Ok(true)
+        );
+        assert_eq!(origin.is_close_to_point(three_four_five, 5.0), Ok(true));
+        assert_eq!(
+            origin.is_close_to_point(three_four_five, f64::from_bits(5.0_f64.to_bits() - 1)),
+            Ok(false)
+        );
+        assert_eq!(
+            origin.is_close_to_point(three_four_five, 5.000_000_000_1),
+            Ok(true)
+        );
+        assert_eq!(
+            three_four_five.is_close_to_point(origin, 5.000_000_000_1),
+            Ok(true)
+        );
+    }
+
+    #[test]
+    fn point_closeness_rejects_negative_or_non_finite_tolerances() {
+        let origin = point(0.0, 0.0);
+
+        for invalid in [
+            f64::NEG_INFINITY,
+            -f64::MAX,
+            -1.0,
+            -f64::from_bits(1),
+            f64::NAN,
+            f64::INFINITY,
+        ] {
+            assert_eq!(
+                origin.is_close_to_point(origin, invalid),
+                Err(KinematicsError::InvalidTolerance)
+            );
+            assert_eq!(
+                point(-f64::MAX, 0.0).is_close_to_point(point(f64::MAX, 0.0), invalid),
+                Err(KinematicsError::InvalidTolerance)
+            );
+        }
+    }
+
+    #[test]
+    fn point_closeness_propagates_unrepresentable_distance_errors() {
+        assert_eq!(
+            point(-f64::MAX, 0.0).is_close_to_point(point(f64::MAX, 0.0), f64::MAX),
+            Err(KinematicsError::NumericalFailure)
+        );
+    }
+
+    #[test]
     fn forward_reports_invalid_point_when_the_result_overflows() {
         let robot = Scara::new(f64::MAX, f64::MAX).unwrap();
 

@@ -8,4 +8,5 @@ pub enum PlannerError {
     AngleNonFinite,
     MinGreaterThanMax,
     AngleOutOfLimits,
+    InitialPositionNotInStart,
 }

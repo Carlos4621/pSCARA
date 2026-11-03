@@ -31,8 +31,16 @@ impl Point {
         Ok(distance)
     }
 
-    pub fn is_close_to_point(&self, other: Point, max_tolerance: f64) -> Result<bool, KinematicsError> {
-        Ok(self.distance_to_point(other)?.abs() < max_tolerance)
+    pub fn is_close_to_point(
+        &self,
+        other: Point,
+        max_tolerance: f64,
+    ) -> Result<bool, KinematicsError> {
+        if !max_tolerance.is_finite() || max_tolerance < 0.0 {
+            return Err(KinematicsError::InvalidTolerance);
+        }
+
+        Ok(self.distance_to_point(other)?.abs() <= max_tolerance)
     }
 
     pub fn x(&self) -> f64 {

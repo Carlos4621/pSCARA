@@ -44,7 +44,7 @@ impl Scara {
         let y = self.first_arm_length * libm::sin(angles.first_theta())
             + self.second_arm_length * libm::sin(second_arm_absolute_angle);
 
-        Point::new(x, y)
+        Point::new(x, y).map_err(|_| KinematicsError::NumericalFailure)
     }
 
     pub fn inverse(
@@ -85,11 +85,7 @@ impl Scara {
 
         let first_theta = alpha - beta;
 
-        if !first_theta.is_finite() || !second_theta.is_finite() {
-            return Err(KinematicsError::NumericalFailure);
-        }
-
-        JointAngles::new(first_theta, second_theta)
+        JointAngles::new(first_theta, second_theta).map_err(|_| KinematicsError::NumericalFailure)
     }
 
     const fn is_valid_arm_length(length: f64) -> bool {

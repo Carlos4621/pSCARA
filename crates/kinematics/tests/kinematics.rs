@@ -184,7 +184,7 @@ mod tests {
 
         assert!(matches!(
             robot.forward(angles(0.0, 0.0)),
-            Err(KinematicsError::InvalidPoint)
+            Err(KinematicsError::NumericalFailure)
         ));
     }
 

@@ -934,3 +934,123 @@ fn with_initial_position_maps_invalid_angular_tolerances_exactly() {
         );
     }
 }
+
+#[test]
+fn validate_accepts_reachable_trajectories_for_both_configurations_and_scales() {
+    for scale in [1e-200, 1.0, 1e200] {
+        let robot = Scara::new(scale, scale).unwrap();
+        let path = line((scale, 0.0), (0.0, scale));
+
+        for configuration in configurations() {
+            assert_eq!(
+                JointTrajectory::new(&robot, &path, scale / 4.0, configuration)
+                    .unwrap()
+                    .validate(),
+                Ok(())
+            );
+        }
+    }
+}
+
+#[test]
+fn validate_preserves_an_unreachable_start_error_for_both_configurations() {
+    let robot = Scara::new(100.0, 60.0).unwrap();
+    let path = line((0.0, 0.0), (160.0, 0.0));
+
+    for configuration in configurations() {
+        assert_eq!(
+            JointTrajectory::new(&robot, &path, 20.0, configuration)
+                .unwrap()
+                .validate(),
+            Err(PlannerError::Kinematics(KinematicsError::UnreachablePoint))
+        );
+    }
+}
+
+#[test]
+fn validate_detects_an_unreachable_interior_point_after_a_valid_prefix() {
+    let robot = Scara::new(100.0, 60.0).unwrap();
+    let path = line((-160.0, 0.0), (160.0, 0.0));
+
+    for configuration in configurations() {
+        let mut trajectory = JointTrajectory::new(&robot, &path, 20.0, configuration).unwrap();
+        assert!(matches!(trajectory.next(), Some(Ok(_))));
+
+        assert_eq!(
+            trajectory.validate(),
+            Err(PlannerError::Kinematics(KinematicsError::UnreachablePoint))
+        );
+    }
+}
+
+#[test]
+fn validate_preserves_numerical_kinematics_failures() {
+    let smallest_length = f64::from_bits(1);
+    let largest_length = f64::MAX;
+
+    for (first_arm_length, second_arm_length) in [
+        (smallest_length, largest_length),
+        (largest_length, smallest_length),
+    ] {
+        let robot = Scara::new(first_arm_length, second_arm_length).unwrap();
+        let path = line((largest_length, 0.0), (largest_length, 0.0));
+
+        for configuration in configurations() {
+            assert_eq!(
+                JointTrajectory::new(&robot, &path, f64::MAX, configuration)
+                    .unwrap()
+                    .validate(),
+                Err(PlannerError::Kinematics(KinematicsError::NumericalFailure))
+            );
+        }
+    }
+}
+
+#[test]
+fn validate_detects_a_limit_violation_after_an_accepted_start() {
+    let robot = Scara::new(100.0, 60.0).unwrap();
+    let path = line((160.0, 0.0), (40.0, 0.0));
+    let restrictive_limits = limits(0.0, 0.0, 0.0, 0.0);
+
+    for configuration in configurations() {
+        assert_eq!(
+            JointTrajectory::new(&robot, &path, 20.0, configuration)
+                .unwrap()
+                .with_limits(&restrictive_limits)
+                .unwrap()
+                .validate(),
+            Err(PlannerError::AngleOutOfLimits)
+        );
+    }
+}
+
+#[test]
+fn validate_accepts_noncanonical_initial_turns_with_matching_limits() {
+    let robot = Scara::new(100.0, 60.0).unwrap();
+    let path = line((-100.0, 0.0), (-100.0, 0.0));
+
+    for configuration in configurations() {
+        let canonical = robot.inverse(path.start, configuration).unwrap();
+        let initial = angles(
+            canonical.first_theta() + core::f64::consts::TAU,
+            canonical.second_theta() - core::f64::consts::TAU,
+        );
+        let matching_limits = limits(
+            initial.first_theta() - 1e-10,
+            initial.first_theta() + 1e-10,
+            initial.second_theta() - 1e-10,
+            initial.second_theta() + 1e-10,
+        );
+
+        assert_eq!(
+            JointTrajectory::new(&robot, &path, f64::MAX, configuration)
+                .unwrap()
+                .with_initial_position(initial, 1e-10, 1e-10)
+                .unwrap()
+                .with_limits(&matching_limits)
+                .unwrap()
+                .validate(),
+            Ok(())
+        );
+    }
+}

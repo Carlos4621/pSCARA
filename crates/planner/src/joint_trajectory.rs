@@ -35,10 +35,8 @@ impl<'a> JointTrajectory<'a> {
     }
 
     pub fn with_limits(mut self, joint_limits: &'a JointLimits) -> Result<Self, PlannerError> {
-        if let Some(previus) = self.previous_angle {
-            if !joint_limits.contains(previus)? {
+        if let Some(previus) = self.previous_angle && !joint_limits.contains(previus)? {
                 return Err(PlannerError::AngleOutOfLimits);
-            }
         }
 
         self.limits = Some(joint_limits);
@@ -88,6 +86,14 @@ impl<'a> JointTrajectory<'a> {
         self.previous_angle = Some(validated_angle);
 
         Ok(self)
+    }
+
+    pub fn validate(self) -> Result<(), PlannerError> {
+        for n in self {
+            n?;
+        }
+
+        Ok(())
     }
 
     fn unwrap_angle(previous: f64, next: f64) -> Result<f64, PlannerError> {

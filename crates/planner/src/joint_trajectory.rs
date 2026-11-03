@@ -37,7 +37,7 @@ impl<'a> JointTrajectory<'a> {
     pub fn with_limits(mut self, joint_limits: &'a JointLimits) -> Result<Self, PlannerError> {
         if let Some(previus) = self.previous_angle {
             if !joint_limits.contains(previus)? {
-                return Err(PlannerError::InitialPositionGreaterThanLimits);
+                return Err(PlannerError::AngleOutOfLimits);
             }
         }
 

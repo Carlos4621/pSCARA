@@ -756,7 +756,7 @@ fn initial_position_outside_limits_is_rejected_in_either_builder_order() {
                     .unwrap()
                     .with_limits(joint_limits)
                     .unwrap_err(),
-                PlannerError::InitialPositionGreaterThanLimits
+                PlannerError::AngleOutOfLimits
             );
         }
     }
@@ -828,7 +828,7 @@ fn limits_after_initial_position_validate_the_stored_noncanonical_turn() {
 
         assert_eq!(
             trajectory.with_limits(&canonical_turn_limits).unwrap_err(),
-            PlannerError::InitialPositionGreaterThanLimits
+            PlannerError::AngleOutOfLimits
         );
     }
 }

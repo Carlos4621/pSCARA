@@ -1,5 +1,5 @@
 use kinematics::Point;
-use trajectory::{LineSegment, TrajectoryError, TrajectoryPoints};
+use trajectory::{LineSegment, TrajectoryError};
 
 fn segment(start: (f64, f64), end: (f64, f64)) -> LineSegment {
     LineSegment {
@@ -266,44 +266,11 @@ fn points_rejects_requested_resolutions_that_cannot_fit_in_usize() {
 }
 
 #[test]
-fn public_constructor_iterates_the_requested_number_of_intervals() {
-    let line = segment((-8.0, 4.0), (8.0, -4.0));
-    let actual: Vec<_> = TrajectoryPoints::new(&line, 4)
-        .map(|result| result.unwrap_or_else(|_| panic!("valid point rejected")))
-        .collect();
-    let expected = [
-        point(-8.0, 4.0),
-        point(-4.0, 2.0),
-        point(0.0, 0.0),
-        point(4.0, -2.0),
-        point(8.0, -4.0),
-    ];
-
-    assert_eq!(actual.len(), expected.len());
-    for (actual, expected) in actual.into_iter().zip(expected) {
-        assert_point_eq(actual, expected);
-    }
-}
-
-#[test]
-fn public_constructor_with_zero_max_index_yields_only_the_end() {
-    let line = segment((-8.0, 4.0), (8.0, -4.0));
-    let mut points = TrajectoryPoints::new(&line, 0);
-
-    assert_point_eq(
-        points
-            .next()
-            .unwrap()
-            .unwrap_or_else(|_| panic!("end rejected")),
-        line.end,
-    );
-    assert!(points.next().is_none());
-}
-
-#[test]
 fn get_segment_returns_the_borrowed_segment() {
     let line = segment((-3.0, 7.0), (11.0, -13.0));
-    let points = TrajectoryPoints::new(&line, 3);
+    let points = line
+        .points(f64::MAX)
+        .unwrap_or_else(|_| panic!("valid trajectory rejected"));
 
     assert!(core::ptr::eq(points.get_segment(), &line));
 }

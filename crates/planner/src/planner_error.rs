@@ -10,4 +10,5 @@ pub enum PlannerError {
     AngleOutOfLimits,
     InitialPositionNotInStart,
     InitialConfigurationMismatch,
+    InitialPositionGreaterThanLimits,
 }

@@ -425,6 +425,7 @@ fn with_limits_accepts_the_same_trajectory_when_every_sample_is_in_range() {
         let actual: Vec<_> = JointTrajectory::new(&robot, &path, maximum, configuration)
             .unwrap()
             .with_limits(&joint_limits)
+            .unwrap()
             .map(Result::unwrap)
             .collect();
 
@@ -461,7 +462,8 @@ fn with_limits_rejects_either_joint_on_the_first_sample_and_then_stays_finished(
     for joint_limits in &rejected_limits {
         let mut trajectory = JointTrajectory::new(&robot, &path, f64::MAX, configuration)
             .unwrap()
-            .with_limits(joint_limits);
+            .with_limits(joint_limits)
+            .unwrap();
 
         assert_next_error(trajectory.next(), PlannerError::AngleOutOfLimits);
         assert!(trajectory.next().is_none());
@@ -478,7 +480,8 @@ fn with_limits_returns_the_accepted_prefix_then_stops_at_the_first_violation() {
     for configuration in configurations() {
         let mut trajectory = JointTrajectory::new(&robot, &path, 20.0, configuration)
             .unwrap()
-            .with_limits(&joint_limits);
+            .with_limits(&joint_limits)
+            .unwrap();
         let expected = robot.inverse(path.start, configuration).unwrap();
 
         assert_angles_exact(unwrap_angles(trajectory.next()), expected);
@@ -499,14 +502,18 @@ fn the_last_with_limits_call_replaces_the_previous_limits() {
         JointTrajectory::new(&robot, &path, f64::MAX, ElbowConfiguration::Positive)
             .unwrap()
             .with_limits(&rejected)
-            .with_limits(&allowed);
+            .unwrap()
+            .with_limits(&allowed)
+            .unwrap();
     assert_angles_exact(unwrap_angles(allowed_last.next()), angles(0.0, 0.0));
 
     let mut rejected_last =
         JointTrajectory::new(&robot, &path, f64::MAX, ElbowConfiguration::Positive)
             .unwrap()
             .with_limits(&allowed)
-            .with_limits(&rejected);
+            .unwrap()
+            .with_limits(&rejected)
+            .unwrap();
     assert_next_error(rejected_last.next(), PlannerError::AngleOutOfLimits);
 }
 
@@ -555,6 +562,7 @@ fn with_limits_validates_unwrapped_angles_across_the_pi_branch_cut() {
         let actual: Vec<_> = JointTrajectory::new(&robot, &path, maximum, configuration)
             .unwrap()
             .with_limits(&joint_limits)
+            .unwrap()
             .map(Result::unwrap)
             .collect();
 
@@ -574,7 +582,8 @@ fn with_limits_preserves_kinematics_error_precedence_and_finishes_the_iterator()
     for configuration in configurations() {
         let mut trajectory = JointTrajectory::new(&robot, &path, 20.0, configuration)
             .unwrap()
-            .with_limits(&restrictive_limits);
+            .with_limits(&restrictive_limits)
+            .unwrap();
 
         assert_next_error(
             trajectory.next(),
@@ -711,10 +720,117 @@ fn with_initial_position_validates_existing_limits_before_cartesian_position() {
         JointTrajectory::new(&robot, &path, f64::MAX, ElbowConfiguration::Positive)
             .unwrap()
             .with_limits(&restrictive_limits)
+            .unwrap()
             .with_initial_position(angles(0.0, 0.0), 0.5, f64::MAX)
             .unwrap_err(),
         PlannerError::AngleOutOfLimits
     );
+}
+
+#[test]
+fn initial_position_outside_limits_is_rejected_in_either_builder_order() {
+    let robot = Scara::new(100.0, 60.0).unwrap();
+    let path = line((160.0, 0.0), (160.0, 0.0));
+    let initial = angles(0.0, 0.0);
+    let rejected_limits = [
+        limits(1.0, 2.0, -f64::MAX, f64::MAX),
+        limits(-f64::MAX, f64::MAX, 1.0, 2.0),
+    ];
+
+    for configuration in configurations() {
+        for joint_limits in &rejected_limits {
+            assert_eq!(
+                JointTrajectory::new(&robot, &path, f64::MAX, configuration)
+                    .unwrap()
+                    .with_limits(joint_limits)
+                    .unwrap()
+                    .with_initial_position(initial, 0.0, 0.0)
+                    .unwrap_err(),
+                PlannerError::AngleOutOfLimits
+            );
+
+            assert_eq!(
+                JointTrajectory::new(&robot, &path, f64::MAX, configuration)
+                    .unwrap()
+                    .with_initial_position(initial, 0.0, 0.0)
+                    .unwrap()
+                    .with_limits(joint_limits)
+                    .unwrap_err(),
+                PlannerError::InitialPositionGreaterThanLimits
+            );
+        }
+    }
+}
+
+#[test]
+fn limits_including_initial_position_are_accepted_in_either_builder_order() {
+    let robot = Scara::new(100.0, 60.0).unwrap();
+    let path = line((160.0, 0.0), (160.0, 0.0));
+    let initial = angles(0.0, 0.0);
+    let inclusive_limits = limits(0.0, 0.0, 0.0, 0.0);
+
+    for configuration in configurations() {
+        let limits_first: Vec<_> = JointTrajectory::new(&robot, &path, f64::MAX, configuration)
+            .unwrap()
+            .with_limits(&inclusive_limits)
+            .unwrap()
+            .with_initial_position(initial, 0.0, 0.0)
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        let initial_first: Vec<_> = JointTrajectory::new(&robot, &path, f64::MAX, configuration)
+            .unwrap()
+            .with_initial_position(initial, 0.0, 0.0)
+            .unwrap()
+            .with_limits(&inclusive_limits)
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+
+        assert_eq!(limits_first.len(), 2);
+        assert_eq!(initial_first.len(), limits_first.len());
+        for (limits_first, initial_first) in limits_first.into_iter().zip(initial_first) {
+            assert_angles_exact(limits_first, initial_first);
+        }
+    }
+}
+
+#[test]
+fn limits_after_initial_position_validate_the_stored_noncanonical_turn() {
+    let robot = Scara::new(100.0, 60.0).unwrap();
+    let path = line((-100.0, 0.0), (-100.0, 0.0));
+
+    for configuration in configurations() {
+        let canonical = robot.inverse(path.start, configuration).unwrap();
+        let initial = angles(
+            canonical.first_theta() + core::f64::consts::TAU,
+            canonical.second_theta(),
+        );
+        let initial_turn_limits = limits(
+            initial.first_theta() - 0.1,
+            initial.first_theta() + 0.1,
+            -f64::MAX,
+            f64::MAX,
+        );
+        let canonical_turn_limits = limits(
+            canonical.first_theta() - 0.1,
+            canonical.first_theta() + 0.1,
+            -f64::MAX,
+            f64::MAX,
+        );
+
+        let trajectory = JointTrajectory::new(&robot, &path, f64::MAX, configuration)
+            .unwrap()
+            .with_initial_position(initial, 1e-10, 1e-10)
+            .unwrap()
+            .with_limits(&initial_turn_limits)
+            .unwrap();
+
+        assert_eq!(
+            trajectory.with_limits(&canonical_turn_limits).unwrap_err(),
+            PlannerError::InitialPositionGreaterThanLimits
+        );
+    }
 }
 
 #[test]
@@ -736,12 +852,14 @@ fn initial_position_and_limits_can_select_a_noncanonical_turn() {
 
     let mut without_initial = JointTrajectory::new(&robot, &path, 0.25, configuration)
         .unwrap()
-        .with_limits(&joint_limits);
+        .with_limits(&joint_limits)
+        .unwrap();
     assert_next_error(without_initial.next(), PlannerError::AngleOutOfLimits);
 
     let actual: Vec<_> = JointTrajectory::new(&robot, &path, 0.25, configuration)
         .unwrap()
         .with_limits(&joint_limits)
+        .unwrap()
         .with_initial_position(initial, 1e-10, 1e-10)
         .unwrap()
         .map(Result::unwrap)

@@ -42,9 +42,10 @@ impl<'a> JointTrajectory<'a> {
     pub fn with_initial_position(
         mut self,
         initial_position: JointAngles,
-        max_tolerance: f64,
+        max_point_distance_tolerance: f64,
+        max_angular_tolerance: f64,
     ) -> Result<Self, PlannerError> {
-        self.previous_angle = Some(self.validate_limits(initial_position)?);
+        let validated_angle = self.validate_limits(initial_position)?;
 
         let initial_position_point = self
             .scara
@@ -52,11 +53,33 @@ impl<'a> JointTrajectory<'a> {
             .map_err(PlannerError::Kinematics)?;
 
         if !initial_position_point
-            .is_close_to_point(self.trajectory_points.get_segment().start, max_tolerance)
+            .is_close_to_point(
+                self.trajectory_points.get_segment().start,
+                max_point_distance_tolerance,
+            )
             .map_err(PlannerError::Kinematics)?
         {
             return Err(PlannerError::InitialPositionNotInStart);
         }
+
+        let expected_angle = self
+            .scara
+            .inverse(
+                self.trajectory_points.get_segment().start,
+                self.configuration,
+            )
+            .map_err(PlannerError::Kinematics)?;
+
+        let aligned = Self::unwrap_joint_angles(initial_position, expected_angle)?;
+
+        if !aligned
+            .is_close_to_joint(initial_position, max_angular_tolerance)
+            .map_err(PlannerError::Kinematics)?
+        {
+            return Err(PlannerError::InitialConfigurationMismatch);
+        }
+
+        self.previous_angle = Some(validated_angle);
 
         Ok(self)
     }

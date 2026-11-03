@@ -75,6 +75,116 @@ mod tests {
     }
 
     #[test]
+    fn joint_angles_closeness_accepts_identical_values_with_zero_tolerance() {
+        for joint_angles in [
+            angles(-f64::MAX, f64::MAX),
+            angles(-f64::MIN_POSITIVE, f64::MIN_POSITIVE),
+            angles(-f64::from_bits(1), f64::from_bits(1)),
+            angles(-0.0, 0.0),
+            angles(PI, -PI),
+        ] {
+            for zero in [0.0, -0.0] {
+                assert_eq!(joint_angles.is_close_to_joint(joint_angles, zero), Ok(true));
+            }
+        }
+    }
+
+    #[test]
+    fn joint_angles_closeness_includes_each_tolerance_boundary() {
+        let origin = angles(0.0, 0.0);
+
+        for other in [
+            angles(-1.0, -1.0),
+            angles(-1.0, 1.0),
+            angles(1.0, -1.0),
+            angles(1.0, 1.0),
+        ] {
+            assert_eq!(origin.is_close_to_joint(other, 1.0), Ok(true));
+            assert_eq!(other.is_close_to_joint(origin, 1.0), Ok(true));
+        }
+    }
+
+    #[test]
+    fn joint_angles_closeness_rejects_when_either_component_exceeds_tolerance() {
+        let origin = angles(0.0, 0.0);
+        let just_above_one = f64::from_bits(1.0_f64.to_bits() + 1);
+
+        for outside in [
+            angles(-just_above_one, 0.0),
+            angles(just_above_one, 0.0),
+            angles(0.0, -just_above_one),
+            angles(0.0, just_above_one),
+            angles(just_above_one, just_above_one),
+        ] {
+            assert_eq!(origin.is_close_to_joint(outside, 1.0), Ok(false));
+            assert_eq!(outside.is_close_to_joint(origin, 1.0), Ok(false));
+        }
+    }
+
+    #[test]
+    fn joint_angles_closeness_is_component_wise_and_translation_invariant() {
+        let origin = angles(0.0, 0.0);
+        let diagonal = angles(0.75, -0.75);
+        let translated_origin = angles(8.0, -16.0);
+        let translated_diagonal = angles(8.75, -16.75);
+
+        assert_eq!(origin.is_close_to_joint(diagonal, 1.0), Ok(true));
+        assert!(libm::hypot(0.75, 0.75) > 1.0);
+        assert_eq!(
+            origin.is_close_to_joint(diagonal, 1.0),
+            translated_origin.is_close_to_joint(translated_diagonal, 1.0)
+        );
+    }
+
+    #[test]
+    fn joint_angles_closeness_does_not_reduce_complete_turns() {
+        let canonical = angles(0.25, -0.5);
+        let another_turn = angles(0.25 + TAU, -0.5 - TAU);
+
+        assert_eq!(
+            canonical.is_close_to_joint(another_turn, ABSOLUTE_TOLERANCE),
+            Ok(false)
+        );
+        assert_eq!(canonical.is_close_to_joint(another_turn, TAU), Ok(true));
+    }
+
+    #[test]
+    fn joint_angles_closeness_handles_extreme_finite_differences() {
+        assert_eq!(
+            angles(f64::MAX, 0.0).is_close_to_joint(angles(0.0, 0.0), f64::MAX),
+            Ok(true)
+        );
+        assert_eq!(
+            angles(f64::MAX, 0.0).is_close_to_joint(angles(-f64::MAX, 0.0), f64::MAX),
+            Ok(false)
+        );
+    }
+
+    #[test]
+    fn joint_angles_closeness_rejects_negative_or_non_finite_tolerances_first() {
+        let identical = angles(0.0, 0.0);
+        let extreme = angles(f64::MAX, -f64::MAX);
+
+        for invalid in [
+            f64::NEG_INFINITY,
+            -f64::MAX,
+            -1.0,
+            -f64::from_bits(1),
+            f64::NAN,
+            f64::INFINITY,
+        ] {
+            assert_eq!(
+                identical.is_close_to_joint(identical, invalid),
+                Err(KinematicsError::InvalidTolerance)
+            );
+            assert_eq!(
+                extreme.is_close_to_joint(angles(-f64::MAX, f64::MAX), invalid),
+                Err(KinematicsError::InvalidTolerance)
+            );
+        }
+    }
+
+    #[test]
     fn new_accepts_positive_finite_arm_lengths() {
         assert!(Scara::new(150.0, 100.0).is_ok());
     }

@@ -598,7 +598,7 @@ fn with_initial_position_preserves_the_requested_equivalent_turn() {
         );
         let mut trajectory = JointTrajectory::new(&robot, &path, 0.25, configuration)
             .unwrap()
-            .with_initial_position(initial, 1e-10)
+            .with_initial_position(initial, 1e-10, 1e-10)
             .unwrap();
 
         let first = unwrap_angles(trajectory.next());
@@ -623,14 +623,14 @@ fn with_initial_position_uses_an_inclusive_cartesian_tolerance() {
     assert!(
         JointTrajectory::new(&robot, &path, f64::MAX, ElbowConfiguration::Positive)
             .unwrap()
-            .with_initial_position(initial, 1.0)
+            .with_initial_position(initial, 1.0, f64::MAX)
             .is_ok()
     );
 
     assert_eq!(
         JointTrajectory::new(&robot, &path, f64::MAX, ElbowConfiguration::Positive)
             .unwrap()
-            .with_initial_position(initial, f64::from_bits(1.0_f64.to_bits() - 1))
+            .with_initial_position(initial, f64::from_bits(1.0_f64.to_bits() - 1), f64::MAX,)
             .unwrap_err(),
         PlannerError::InitialPositionNotInStart
     );
@@ -640,14 +640,14 @@ fn with_initial_position_uses_an_inclusive_cartesian_tolerance() {
         assert!(
             JointTrajectory::new(&robot, &exact_path, f64::MAX, ElbowConfiguration::Positive)
                 .unwrap()
-                .with_initial_position(initial, zero)
+                .with_initial_position(initial, zero, 0.0)
                 .is_ok()
         );
     }
 }
 
 #[test]
-fn with_initial_position_maps_invalid_tolerances_exactly() {
+fn with_initial_position_maps_invalid_cartesian_tolerances_exactly() {
     let robot = Scara::new(100.0, 60.0).unwrap();
     let path = line((160.0, 0.0), (160.0, 0.0));
     let initial = angles(0.0, 0.0);
@@ -663,7 +663,7 @@ fn with_initial_position_maps_invalid_tolerances_exactly() {
         assert_eq!(
             JointTrajectory::new(&robot, &path, f64::MAX, ElbowConfiguration::Positive)
                 .unwrap()
-                .with_initial_position(initial, invalid)
+                .with_initial_position(initial, invalid, 0.0)
                 .unwrap_err(),
             PlannerError::Kinematics(KinematicsError::InvalidTolerance)
         );
@@ -680,7 +680,7 @@ fn with_initial_position_rejects_a_finite_position_outside_the_start_tolerance()
         assert_eq!(
             JointTrajectory::new(&robot, &path, 0.25, configuration)
                 .unwrap()
-                .with_initial_position(initial, 0.5)
+                .with_initial_position(initial, 0.5, f64::MAX)
                 .unwrap_err(),
             PlannerError::InitialPositionNotInStart
         );
@@ -695,7 +695,7 @@ fn with_initial_position_maps_forward_numerical_failure_exactly() {
     assert_eq!(
         JointTrajectory::new(&robot, &path, f64::MAX, ElbowConfiguration::Positive)
             .unwrap()
-            .with_initial_position(angles(0.0, 0.0), f64::MAX)
+            .with_initial_position(angles(0.0, 0.0), f64::MAX, f64::MAX)
             .unwrap_err(),
         PlannerError::Kinematics(KinematicsError::NumericalFailure)
     );
@@ -711,7 +711,7 @@ fn with_initial_position_validates_existing_limits_before_cartesian_position() {
         JointTrajectory::new(&robot, &path, f64::MAX, ElbowConfiguration::Positive)
             .unwrap()
             .with_limits(&restrictive_limits)
-            .with_initial_position(angles(0.0, 0.0), 0.5)
+            .with_initial_position(angles(0.0, 0.0), 0.5, f64::MAX)
             .unwrap_err(),
         PlannerError::AngleOutOfLimits
     );
@@ -742,7 +742,7 @@ fn initial_position_and_limits_can_select_a_noncanonical_turn() {
     let actual: Vec<_> = JointTrajectory::new(&robot, &path, 0.25, configuration)
         .unwrap()
         .with_limits(&joint_limits)
-        .with_initial_position(initial, 1e-10)
+        .with_initial_position(initial, 1e-10, 1e-10)
         .unwrap()
         .map(Result::unwrap)
         .collect();
@@ -753,4 +753,66 @@ fn initial_position_and_limits_can_select_a_noncanonical_turn() {
             .iter()
             .all(|angles| joint_limits.contains(*angles) == Ok(true))
     );
+}
+
+#[test]
+fn with_initial_position_accepts_the_configured_elbow_branch() {
+    let robot = Scara::new(100.0, 50.0).unwrap();
+    let path = line((100.0, 50.0), (100.0, 50.0));
+
+    for configuration in configurations() {
+        let initial = robot.inverse(path.start, configuration).unwrap();
+
+        assert!(
+            JointTrajectory::new(&robot, &path, f64::MAX, configuration)
+                .unwrap()
+                .with_initial_position(initial, 1e-10, 1e-10)
+                .is_ok()
+        );
+    }
+}
+
+#[test]
+fn with_initial_position_rejects_the_opposite_elbow_branch() {
+    let robot = Scara::new(100.0, 50.0).unwrap();
+    let path = line((100.0, 50.0), (100.0, 50.0));
+
+    for (configured, opposite) in [
+        (ElbowConfiguration::Positive, ElbowConfiguration::Negative),
+        (ElbowConfiguration::Negative, ElbowConfiguration::Positive),
+    ] {
+        let initial = robot.inverse(path.start, opposite).unwrap();
+
+        assert_eq!(
+            JointTrajectory::new(&robot, &path, f64::MAX, configured)
+                .unwrap()
+                .with_initial_position(initial, 1e-10, 1e-10)
+                .unwrap_err(),
+            PlannerError::InitialConfigurationMismatch
+        );
+    }
+}
+
+#[test]
+fn with_initial_position_maps_invalid_angular_tolerances_exactly() {
+    let robot = Scara::new(100.0, 60.0).unwrap();
+    let path = line((160.0, 0.0), (160.0, 0.0));
+    let initial = angles(0.0, 0.0);
+
+    for invalid in [
+        f64::NEG_INFINITY,
+        -f64::MAX,
+        -1.0,
+        -f64::from_bits(1),
+        f64::NAN,
+        f64::INFINITY,
+    ] {
+        assert_eq!(
+            JointTrajectory::new(&robot, &path, f64::MAX, ElbowConfiguration::Positive)
+                .unwrap()
+                .with_initial_position(initial, 0.0, invalid)
+                .unwrap_err(),
+            PlannerError::Kinematics(KinematicsError::InvalidTolerance)
+        );
+    }
 }

@@ -94,9 +94,9 @@ impl<'a> JointTrajectory<'a> {
         Ok(self)
     }
 
-    pub fn with_max_joint_angle(mut self, max_joint_step: f64) -> Result<Self, PlannerError> {
-        if !max_joint_step.is_finite() || max_joint_step < 0.0 {
-            return Err(PlannerError::InvalidMaxJointAngle);
+    pub fn with_max_joint_step(mut self, max_joint_step: f64) -> Result<Self, PlannerError> {
+        if !max_joint_step.is_finite() || max_joint_step <= 0.0 {
+            return Err(PlannerError::InvalidMaxJointStep);
         }
 
         self.max_joint_step = Some(max_joint_step);
@@ -173,7 +173,7 @@ impl<'a> JointTrajectory<'a> {
             .is_close_to_joint(next, joint_step)
             .map_err(PlannerError::Kinematics)?
         {
-            return Err(PlannerError::MaxJointAngleExceeded);
+            return Err(PlannerError::MaxJointStepExceeded);
         }
 
         Ok(next)

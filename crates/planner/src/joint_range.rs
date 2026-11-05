@@ -1,5 +1,3 @@
-use core::f64;
-
 use crate::PlannerError;
 
 #[derive(Debug, Clone, Copy)]

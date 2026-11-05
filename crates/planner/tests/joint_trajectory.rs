@@ -5,6 +5,7 @@ use planner::{JointLimits, JointRange, JointTrajectory, PlannerError, ValidatedT
 use trajectory::{LineSegment, TrajectoryError};
 
 const ANGLE_TOLERANCE: f64 = 1e-10;
+const MIN_POSITIVE_STEP: f64 = f64::from_bits(1);
 
 fn line(start: (f64, f64), end: (f64, f64)) -> LineSegment {
     LineSegment {
@@ -394,7 +395,7 @@ fn cartesian_to_joint_composition_is_stable_across_finite_scales() {
 }
 
 #[test]
-fn with_max_joint_angle_rejects_non_finite_and_negative_thresholds() {
+fn with_max_joint_step_rejects_non_finite_and_non_positive_thresholds() {
     let robot = Scara::new(100.0, 60.0).unwrap();
     let path = line((160.0, 0.0), (160.0, 0.0));
 
@@ -402,45 +403,40 @@ fn with_max_joint_angle_rejects_non_finite_and_negative_thresholds() {
         f64::NEG_INFINITY,
         -f64::MAX,
         -1.0,
-        -f64::from_bits(1),
+        -MIN_POSITIVE_STEP,
+        -0.0,
+        0.0,
         f64::NAN,
         f64::INFINITY,
     ] {
         assert_eq!(
             JointTrajectory::new(&robot, &path, f64::MAX, ElbowConfiguration::Positive)
                 .unwrap()
-                .with_max_joint_angle(invalid)
+                .with_max_joint_step(invalid)
                 .unwrap_err(),
-            PlannerError::InvalidMaxJointAngle
+            PlannerError::InvalidMaxJointStep
         );
     }
 
-    for valid in [
-        -0.0,
-        0.0,
-        f64::from_bits(1),
-        f64::MIN_POSITIVE,
-        1.0,
-        f64::MAX,
-    ] {
+    for valid in [MIN_POSITIVE_STEP, f64::MIN_POSITIVE, 1.0, f64::MAX] {
         assert!(
             JointTrajectory::new(&robot, &path, f64::MAX, ElbowConfiguration::Positive)
                 .unwrap()
-                .with_max_joint_angle(valid)
+                .with_max_joint_step(valid)
                 .is_ok()
         );
     }
 }
 
 #[test]
-fn zero_max_joint_angle_accepts_unchanged_consecutive_samples() {
+fn smallest_positive_max_joint_step_accepts_unchanged_consecutive_samples() {
     let robot = Scara::new(100.0, 60.0).unwrap();
     let path = line((160.0, 0.0), (160.0, 0.0));
 
     for configuration in configurations() {
         let samples: Vec<_> = JointTrajectory::new(&robot, &path, f64::MAX, configuration)
             .unwrap()
-            .with_max_joint_angle(0.0)
+            .with_max_joint_step(MIN_POSITIVE_STEP)
             .unwrap()
             .map(Result::unwrap)
             .collect();
@@ -452,7 +448,7 @@ fn zero_max_joint_angle_accepts_unchanged_consecutive_samples() {
 }
 
 #[test]
-fn max_joint_angle_starts_comparing_after_the_first_sample_without_an_initial_position() {
+fn max_joint_step_starts_comparing_after_the_first_sample_without_an_initial_position() {
     let robot = Scara::new(100.0, 60.0).unwrap();
     let path = line((160.0, 0.0), (140.0, 0.0));
 
@@ -460,18 +456,18 @@ fn max_joint_angle_starts_comparing_after_the_first_sample_without_an_initial_po
         let expected_first = robot.inverse(path.start, configuration).unwrap();
         let mut trajectory = JointTrajectory::new(&robot, &path, f64::MAX, configuration)
             .unwrap()
-            .with_max_joint_angle(0.0)
+            .with_max_joint_step(MIN_POSITIVE_STEP)
             .unwrap();
 
         assert_angles_exact(unwrap_angles(trajectory.next()), expected_first);
-        assert_next_error(trajectory.next(), PlannerError::MaxJointAngleExceeded);
+        assert_next_error(trajectory.next(), PlannerError::MaxJointStepExceeded);
         assert!(trajectory.next().is_none());
         assert!(trajectory.next().is_none());
     }
 }
 
 #[test]
-fn max_joint_angle_compares_the_initial_position_with_the_first_sample() {
+fn max_joint_step_compares_the_initial_position_with_the_first_sample() {
     let robot = Scara::new(100.0, 60.0).unwrap();
     let initial = angles(0.1, 0.0);
     let path = line((160.0, 0.0), (160.0, 0.0));
@@ -481,27 +477,27 @@ fn max_joint_angle_compares_the_initial_position_with_the_first_sample() {
             .unwrap()
             .with_initial_position(initial, f64::MAX, f64::MAX)
             .unwrap()
-            .with_max_joint_angle(0.0)
+            .with_max_joint_step(MIN_POSITIVE_STEP)
             .unwrap();
-    assert_next_error(max_angle_last.next(), PlannerError::MaxJointAngleExceeded);
+    assert_next_error(max_angle_last.next(), PlannerError::MaxJointStepExceeded);
     assert!(max_angle_last.next().is_none());
 
     let mut initial_position_last =
         JointTrajectory::new(&robot, &path, f64::MAX, ElbowConfiguration::Positive)
             .unwrap()
-            .with_max_joint_angle(0.0)
+            .with_max_joint_step(MIN_POSITIVE_STEP)
             .unwrap()
             .with_initial_position(initial, f64::MAX, f64::MAX)
             .unwrap();
     assert_next_error(
         initial_position_last.next(),
-        PlannerError::MaxJointAngleExceeded,
+        PlannerError::MaxJointStepExceeded,
     );
     assert!(initial_position_last.next().is_none());
 }
 
 #[test]
-fn max_joint_angle_is_inclusive_and_checks_each_joint_independently() {
+fn max_joint_step_is_inclusive_and_checks_each_joint_independently() {
     let robot = Scara::new(100.0, 60.0).unwrap();
     let cases = [
         (angles(0.0, 1.0), angles(0.25, 1.0), true),
@@ -533,7 +529,7 @@ fn max_joint_angle_is_inclusive_and_checks_each_joint_independently() {
         let accepted: Vec<_> =
             JointTrajectory::new(&robot, &path, f64::MAX, ElbowConfiguration::Positive)
                 .unwrap()
-                .with_max_joint_angle(required_threshold)
+                .with_max_joint_step(required_threshold)
                 .unwrap()
                 .map(Result::unwrap)
                 .collect();
@@ -546,25 +542,25 @@ fn max_joint_angle_is_inclusive_and_checks_each_joint_independently() {
         let mut rejected =
             JointTrajectory::new(&robot, &path, f64::MAX, ElbowConfiguration::Positive)
                 .unwrap()
-                .with_max_joint_angle(immediately_smaller)
+                .with_max_joint_step(immediately_smaller)
                 .unwrap();
         assert_angles_exact(unwrap_angles(rejected.next()), expected[0]);
-        assert_next_error(rejected.next(), PlannerError::MaxJointAngleExceeded);
+        assert_next_error(rejected.next(), PlannerError::MaxJointStepExceeded);
         assert!(rejected.next().is_none());
     }
 }
 
 #[test]
-fn the_last_with_max_joint_angle_call_replaces_the_previous_threshold() {
+fn the_last_with_max_joint_step_call_replaces_the_previous_threshold() {
     let robot = Scara::new(100.0, 60.0).unwrap();
     let path = line((160.0, 0.0), (140.0, 0.0));
 
     let accepted: Vec<_> =
         JointTrajectory::new(&robot, &path, f64::MAX, ElbowConfiguration::Positive)
             .unwrap()
-            .with_max_joint_angle(0.0)
+            .with_max_joint_step(MIN_POSITIVE_STEP)
             .unwrap()
-            .with_max_joint_angle(f64::MAX)
+            .with_max_joint_step(f64::MAX)
             .unwrap()
             .map(Result::unwrap)
             .collect();
@@ -572,17 +568,17 @@ fn the_last_with_max_joint_angle_call_replaces_the_previous_threshold() {
 
     let mut rejected = JointTrajectory::new(&robot, &path, f64::MAX, ElbowConfiguration::Positive)
         .unwrap()
-        .with_max_joint_angle(f64::MAX)
+        .with_max_joint_step(f64::MAX)
         .unwrap()
-        .with_max_joint_angle(0.0)
+        .with_max_joint_step(MIN_POSITIVE_STEP)
         .unwrap();
     assert!(rejected.next().unwrap().is_ok());
-    assert_next_error(rejected.next(), PlannerError::MaxJointAngleExceeded);
+    assert_next_error(rejected.next(), PlannerError::MaxJointStepExceeded);
     assert!(rejected.next().is_none());
 }
 
 #[test]
-fn max_joint_angle_checks_unwrapped_steps_across_the_pi_branch_cut() {
+fn max_joint_step_checks_unwrapped_steps_across_the_pi_branch_cut() {
     let robot = Scara::new(100.0, 60.0).unwrap();
     let path = line((-100.0, 1.0), (-100.0, -1.0));
     let maximum = 0.25;
@@ -615,7 +611,7 @@ fn max_joint_angle_checks_unwrapped_steps_across_the_pi_branch_cut() {
 
         let actual: Vec<_> = JointTrajectory::new(&robot, &path, maximum, configuration)
             .unwrap()
-            .with_max_joint_angle(required_threshold)
+            .with_max_joint_step(required_threshold)
             .unwrap()
             .map(Result::unwrap)
             .collect();
@@ -627,7 +623,7 @@ fn max_joint_angle_checks_unwrapped_steps_across_the_pi_branch_cut() {
 }
 
 #[test]
-fn validate_and_into_validated_preserve_max_joint_angle_violations() {
+fn validate_and_into_validated_preserve_max_joint_step_violations() {
     let robot = Scara::new(100.0, 60.0).unwrap();
     let path = line((160.0, 0.0), (140.0, 0.0));
 
@@ -635,32 +631,32 @@ fn validate_and_into_validated_preserve_max_joint_angle_violations() {
         assert_eq!(
             JointTrajectory::new(&robot, &path, f64::MAX, configuration)
                 .unwrap()
-                .with_max_joint_angle(0.0)
+                .with_max_joint_step(MIN_POSITIVE_STEP)
                 .unwrap()
                 .validate(),
-            Err(PlannerError::MaxJointAngleExceeded)
+            Err(PlannerError::MaxJointStepExceeded)
         );
         assert_eq!(
             JointTrajectory::new(&robot, &path, f64::MAX, configuration)
                 .unwrap()
-                .with_max_joint_angle(0.0)
+                .with_max_joint_step(MIN_POSITIVE_STEP)
                 .unwrap()
                 .into_validated()
                 .unwrap_err(),
-            PlannerError::MaxJointAngleExceeded
+            PlannerError::MaxJointStepExceeded
         );
     }
 }
 
 #[test]
-fn kinematics_errors_take_precedence_over_max_joint_angle_validation() {
+fn kinematics_errors_take_precedence_over_max_joint_step_validation() {
     let robot = Scara::new(100.0, 60.0).unwrap();
     let path = line((0.0, 0.0), (160.0, 0.0));
 
     for configuration in configurations() {
         let mut trajectory = JointTrajectory::new(&robot, &path, 20.0, configuration)
             .unwrap()
-            .with_max_joint_angle(0.0)
+            .with_max_joint_step(MIN_POSITIVE_STEP)
             .unwrap();
         assert_next_error(
             trajectory.next(),

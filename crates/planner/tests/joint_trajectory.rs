@@ -394,6 +394,283 @@ fn cartesian_to_joint_composition_is_stable_across_finite_scales() {
 }
 
 #[test]
+fn with_max_joint_angle_rejects_non_finite_and_negative_thresholds() {
+    let robot = Scara::new(100.0, 60.0).unwrap();
+    let path = line((160.0, 0.0), (160.0, 0.0));
+
+    for invalid in [
+        f64::NEG_INFINITY,
+        -f64::MAX,
+        -1.0,
+        -f64::from_bits(1),
+        f64::NAN,
+        f64::INFINITY,
+    ] {
+        assert_eq!(
+            JointTrajectory::new(&robot, &path, f64::MAX, ElbowConfiguration::Positive)
+                .unwrap()
+                .with_max_joint_angle(invalid)
+                .unwrap_err(),
+            PlannerError::InvalidMaxJointAngle
+        );
+    }
+
+    for valid in [
+        -0.0,
+        0.0,
+        f64::from_bits(1),
+        f64::MIN_POSITIVE,
+        1.0,
+        f64::MAX,
+    ] {
+        assert!(
+            JointTrajectory::new(&robot, &path, f64::MAX, ElbowConfiguration::Positive)
+                .unwrap()
+                .with_max_joint_angle(valid)
+                .is_ok()
+        );
+    }
+}
+
+#[test]
+fn zero_max_joint_angle_accepts_unchanged_consecutive_samples() {
+    let robot = Scara::new(100.0, 60.0).unwrap();
+    let path = line((160.0, 0.0), (160.0, 0.0));
+
+    for configuration in configurations() {
+        let samples: Vec<_> = JointTrajectory::new(&robot, &path, f64::MAX, configuration)
+            .unwrap()
+            .with_max_joint_angle(0.0)
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+
+        assert_eq!(samples.len(), 2);
+        assert_eq!(samples[0].first_theta(), samples[1].first_theta());
+        assert_eq!(samples[0].second_theta(), samples[1].second_theta());
+    }
+}
+
+#[test]
+fn max_joint_angle_starts_comparing_after_the_first_sample_without_an_initial_position() {
+    let robot = Scara::new(100.0, 60.0).unwrap();
+    let path = line((160.0, 0.0), (140.0, 0.0));
+
+    for configuration in configurations() {
+        let expected_first = robot.inverse(path.start, configuration).unwrap();
+        let mut trajectory = JointTrajectory::new(&robot, &path, f64::MAX, configuration)
+            .unwrap()
+            .with_max_joint_angle(0.0)
+            .unwrap();
+
+        assert_angles_exact(unwrap_angles(trajectory.next()), expected_first);
+        assert_next_error(trajectory.next(), PlannerError::MaxJointAngleExceeded);
+        assert!(trajectory.next().is_none());
+        assert!(trajectory.next().is_none());
+    }
+}
+
+#[test]
+fn max_joint_angle_compares_the_initial_position_with_the_first_sample() {
+    let robot = Scara::new(100.0, 60.0).unwrap();
+    let initial = angles(0.1, 0.0);
+    let path = line((160.0, 0.0), (160.0, 0.0));
+
+    let mut max_angle_last =
+        JointTrajectory::new(&robot, &path, f64::MAX, ElbowConfiguration::Positive)
+            .unwrap()
+            .with_initial_position(initial, f64::MAX, f64::MAX)
+            .unwrap()
+            .with_max_joint_angle(0.0)
+            .unwrap();
+    assert_next_error(max_angle_last.next(), PlannerError::MaxJointAngleExceeded);
+    assert!(max_angle_last.next().is_none());
+
+    let mut initial_position_last =
+        JointTrajectory::new(&robot, &path, f64::MAX, ElbowConfiguration::Positive)
+            .unwrap()
+            .with_max_joint_angle(0.0)
+            .unwrap()
+            .with_initial_position(initial, f64::MAX, f64::MAX)
+            .unwrap();
+    assert_next_error(
+        initial_position_last.next(),
+        PlannerError::MaxJointAngleExceeded,
+    );
+    assert!(initial_position_last.next().is_none());
+}
+
+#[test]
+fn max_joint_angle_is_inclusive_and_checks_each_joint_independently() {
+    let robot = Scara::new(100.0, 60.0).unwrap();
+    let cases = [
+        (angles(0.0, 1.0), angles(0.25, 1.0), true),
+        (angles(0.0, 0.0), angles(0.0, 0.25), false),
+    ];
+
+    for (start_angles, end_angles, first_joint_dominates) in cases {
+        let path = LineSegment {
+            start: forward(&robot, start_angles),
+            end: forward(&robot, end_angles),
+        };
+        let expected: Vec<_> =
+            JointTrajectory::new(&robot, &path, f64::MAX, ElbowConfiguration::Positive)
+                .unwrap()
+                .map(Result::unwrap)
+                .collect();
+        assert_eq!(expected.len(), 2);
+
+        let first_delta = (expected[1].first_theta() - expected[0].first_theta()).abs();
+        let second_delta = (expected[1].second_theta() - expected[0].second_theta()).abs();
+        if first_joint_dominates {
+            assert!(first_delta > second_delta);
+        } else {
+            assert!(second_delta > first_delta);
+        }
+        let required_threshold = first_delta.max(second_delta);
+        assert!(required_threshold > 0.0);
+
+        let accepted: Vec<_> =
+            JointTrajectory::new(&robot, &path, f64::MAX, ElbowConfiguration::Positive)
+                .unwrap()
+                .with_max_joint_angle(required_threshold)
+                .unwrap()
+                .map(Result::unwrap)
+                .collect();
+        assert_eq!(accepted.len(), expected.len());
+        for (actual, expected) in accepted.into_iter().zip(expected.iter().copied()) {
+            assert_angles_exact(actual, expected);
+        }
+
+        let immediately_smaller = f64::from_bits(required_threshold.to_bits() - 1);
+        let mut rejected =
+            JointTrajectory::new(&robot, &path, f64::MAX, ElbowConfiguration::Positive)
+                .unwrap()
+                .with_max_joint_angle(immediately_smaller)
+                .unwrap();
+        assert_angles_exact(unwrap_angles(rejected.next()), expected[0]);
+        assert_next_error(rejected.next(), PlannerError::MaxJointAngleExceeded);
+        assert!(rejected.next().is_none());
+    }
+}
+
+#[test]
+fn the_last_with_max_joint_angle_call_replaces_the_previous_threshold() {
+    let robot = Scara::new(100.0, 60.0).unwrap();
+    let path = line((160.0, 0.0), (140.0, 0.0));
+
+    let accepted: Vec<_> =
+        JointTrajectory::new(&robot, &path, f64::MAX, ElbowConfiguration::Positive)
+            .unwrap()
+            .with_max_joint_angle(0.0)
+            .unwrap()
+            .with_max_joint_angle(f64::MAX)
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+    assert_eq!(accepted.len(), 2);
+
+    let mut rejected = JointTrajectory::new(&robot, &path, f64::MAX, ElbowConfiguration::Positive)
+        .unwrap()
+        .with_max_joint_angle(f64::MAX)
+        .unwrap()
+        .with_max_joint_angle(0.0)
+        .unwrap();
+    assert!(rejected.next().unwrap().is_ok());
+    assert_next_error(rejected.next(), PlannerError::MaxJointAngleExceeded);
+    assert!(rejected.next().is_none());
+}
+
+#[test]
+fn max_joint_angle_checks_unwrapped_steps_across_the_pi_branch_cut() {
+    let robot = Scara::new(100.0, 60.0).unwrap();
+    let path = line((-100.0, 1.0), (-100.0, -1.0));
+    let maximum = 0.25;
+
+    for configuration in configurations() {
+        let points: Vec<_> = path.points(maximum).unwrap().map(Result::unwrap).collect();
+        let raw: Vec<_> = points
+            .iter()
+            .copied()
+            .map(|point| robot.inverse(point, configuration).unwrap())
+            .collect();
+        assert!(
+            raw.windows(2)
+                .any(|pair| { (pair[1].first_theta() - pair[0].first_theta()).abs() > PI })
+        );
+
+        let expected: Vec<_> = JointTrajectory::new(&robot, &path, maximum, configuration)
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        let required_threshold = expected
+            .windows(2)
+            .map(|pair| {
+                (pair[1].first_theta() - pair[0].first_theta())
+                    .abs()
+                    .max((pair[1].second_theta() - pair[0].second_theta()).abs())
+            })
+            .fold(0.0, f64::max);
+        assert!(required_threshold < PI);
+
+        let actual: Vec<_> = JointTrajectory::new(&robot, &path, maximum, configuration)
+            .unwrap()
+            .with_max_joint_angle(required_threshold)
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(actual.len(), expected.len());
+        for (actual, expected) in actual.into_iter().zip(expected) {
+            assert_angles_exact(actual, expected);
+        }
+    }
+}
+
+#[test]
+fn validate_and_into_validated_preserve_max_joint_angle_violations() {
+    let robot = Scara::new(100.0, 60.0).unwrap();
+    let path = line((160.0, 0.0), (140.0, 0.0));
+
+    for configuration in configurations() {
+        assert_eq!(
+            JointTrajectory::new(&robot, &path, f64::MAX, configuration)
+                .unwrap()
+                .with_max_joint_angle(0.0)
+                .unwrap()
+                .validate(),
+            Err(PlannerError::MaxJointAngleExceeded)
+        );
+        assert_eq!(
+            JointTrajectory::new(&robot, &path, f64::MAX, configuration)
+                .unwrap()
+                .with_max_joint_angle(0.0)
+                .unwrap()
+                .into_validated()
+                .unwrap_err(),
+            PlannerError::MaxJointAngleExceeded
+        );
+    }
+}
+
+#[test]
+fn kinematics_errors_take_precedence_over_max_joint_angle_validation() {
+    let robot = Scara::new(100.0, 60.0).unwrap();
+    let path = line((0.0, 0.0), (160.0, 0.0));
+
+    for configuration in configurations() {
+        let mut trajectory = JointTrajectory::new(&robot, &path, 20.0, configuration)
+            .unwrap()
+            .with_max_joint_angle(0.0)
+            .unwrap();
+        assert_next_error(
+            trajectory.next(),
+            PlannerError::Kinematics(KinematicsError::UnreachablePoint),
+        );
+        assert!(trajectory.next().is_none());
+    }
+}
+
+#[test]
 fn with_limits_accepts_the_same_trajectory_when_every_sample_is_in_range() {
     let robot = Scara::new(100.0, 60.0).unwrap();
     let path = line((40.0, 0.0), (160.0, 0.0));

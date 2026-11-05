@@ -11,4 +11,6 @@ pub enum PlannerError {
     InitialPositionNotInStart,
     InitialConfigurationMismatch,
     TrajectoryAlreadyStarted,
+    InvalidMaxJointAngle,
+    MaxJointAngleExceeded,
 }

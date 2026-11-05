@@ -11,6 +11,7 @@ pub struct JointTrajectory<'a> {
     is_finished: bool,
     previous_angle: Option<JointAngles>,
     limits: Option<&'a JointLimits>,
+    max_joint_step: Option<f64>,
     has_started: bool,
 }
 
@@ -32,6 +33,7 @@ impl<'a> JointTrajectory<'a> {
             is_finished: false,
             previous_angle: None,
             limits: None,
+            max_joint_step: None,
             has_started: false,
         })
     }
@@ -92,6 +94,16 @@ impl<'a> JointTrajectory<'a> {
         Ok(self)
     }
 
+    pub fn with_max_joint_angle(mut self, max_joint_step: f64) -> Result<Self, PlannerError> {
+        if !max_joint_step.is_finite() || max_joint_step < 0.0 {
+            return Err(PlannerError::InvalidMaxJointAngle);
+        }
+
+        self.max_joint_step = Some(max_joint_step);
+
+        Ok(self)
+    }
+
     pub fn validate(self) -> Result<(), PlannerError> {
         if self.has_started {
             return Err(PlannerError::TrajectoryAlreadyStarted);
@@ -147,6 +159,25 @@ impl<'a> JointTrajectory<'a> {
 
         Ok(angle)
     }
+
+    fn validate_max_joint_step(&self, next: JointAngles) -> Result<JointAngles, PlannerError> {
+        let Some(previous) = self.previous_angle else {
+            return Ok(next);
+        };
+
+        let Some(joint_step) = self.max_joint_step else {
+            return Ok(next);
+        };
+
+        if !previous
+            .is_close_to_joint(next, joint_step)
+            .map_err(PlannerError::Kinematics)?
+        {
+            return Err(PlannerError::MaxJointAngleExceeded);
+        }
+
+        Ok(next)
+    }
 }
 
 impl<'a> Iterator for JointTrajectory<'a> {
@@ -174,6 +205,7 @@ impl<'a> Iterator for JointTrajectory<'a> {
                     Some(previous) => Self::unwrap_joint_angles(previous, next),
                     None => Ok(next),
                 })
+                .and_then(|angle| self.validate_max_joint_step(angle))
                 .and_then(|angle| self.validate_limits(angle))
         });
 

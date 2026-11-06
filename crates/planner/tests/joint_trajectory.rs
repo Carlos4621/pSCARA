@@ -1543,3 +1543,394 @@ fn into_validated_rejects_any_trajectory_that_has_already_started() {
         );
     }
 }
+
+#[test]
+fn refinement_preserves_the_complete_valid_trajectory_without_adding_samples() {
+    let robot = Scara::new(100.0, 60.0).unwrap();
+    let path = line((40.0, 0.0), (160.0, 0.0));
+
+    for configuration in configurations() {
+        let trajectory = JointTrajectory::new(&robot, &path, 7.0, configuration).unwrap();
+        let expected: Vec<_> = trajectory.clone().map(Result::unwrap).collect();
+
+        for budget in [0, 1, 2, 8] {
+            let mut validated = trajectory
+                .clone()
+                .into_validated_with_refiment(budget)
+                .unwrap();
+            let _: &ValidatedTrajectory<'_> = &validated;
+            let actual: Vec<_> = validated.by_ref().map(Result::unwrap).collect();
+            assert_eq!(actual.len(), expected.len());
+            for (actual, expected) in actual.into_iter().zip(expected.iter().copied()) {
+                assert_angles_exact(actual, expected);
+            }
+            assert!(validated.next().is_none());
+            assert!(validated.next().is_none());
+        }
+    }
+}
+
+#[test]
+fn refinement_with_zero_attempts_accepts_a_valid_path_without_consuming_it() {
+    let robot = Scara::new(100.0, 60.0).unwrap();
+    let path = line((160.0, 0.0), (140.0, 0.0));
+
+    for configuration in configurations() {
+        let trajectory = JointTrajectory::new(&robot, &path, 20.0, configuration).unwrap();
+        assert_eq!(trajectory.clone().validate(), Ok(()));
+        let expected: Vec<_> = trajectory.clone().map(Result::unwrap).collect();
+        let actual: Vec<_> = trajectory
+            .into_validated_with_refiment(0)
+            .expect("a valid trajectory should not require refinement attempts")
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(actual.len(), expected.len());
+        for (actual, expected) in actual.into_iter().zip(expected) {
+            assert_angles_exact(actual, expected);
+        }
+    }
+}
+
+#[test]
+fn refinement_with_zero_attempts_rejects_a_path_that_requires_refinement() {
+    let robot = Scara::new(100.0, 60.0).unwrap();
+    let path = line((160.0, 0.0), (140.0, 0.0));
+
+    for configuration in configurations() {
+        let trajectory = JointTrajectory::new(&robot, &path, 20.0, configuration)
+            .unwrap()
+            .with_max_joint_step(0.01)
+            .unwrap();
+        assert_eq!(
+            trajectory.clone().validate(),
+            Err(PlannerError::MaxJointStepExceeded)
+        );
+        assert_eq!(
+            trajectory.into_validated_with_refiment(0).unwrap_err(),
+            PlannerError::MaxRefimentsAttempsReached
+        );
+    }
+}
+
+#[test]
+fn refinement_preserves_initial_turns_limits_and_branch_cut_unwrapping() {
+    let robot = Scara::new(100.0, 60.0).unwrap();
+    let path = line((-100.0, 1.0), (-100.0, -1.0));
+
+    for configuration in configurations() {
+        let canonical = robot.inverse(path.start, configuration).unwrap();
+        let initial = angles(
+            canonical.first_theta() + core::f64::consts::TAU,
+            canonical.second_theta() - core::f64::consts::TAU,
+        );
+        let matching_limits = limits(
+            initial.first_theta() - 0.1,
+            initial.first_theta() + 0.1,
+            initial.second_theta() - 0.1,
+            initial.second_theta() + 0.1,
+        );
+        let trajectory = JointTrajectory::new(&robot, &path, 0.25, configuration)
+            .unwrap()
+            .with_initial_position(initial, 1e-10, 1e-10)
+            .unwrap()
+            .with_limits(&matching_limits)
+            .unwrap()
+            .with_max_joint_step(0.1)
+            .unwrap();
+        let expected: Vec<_> = trajectory.clone().map(Result::unwrap).collect();
+        let actual: Vec<_> = trajectory
+            .into_validated_with_refiment(4)
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+
+        assert_eq!(actual.len(), expected.len());
+        for (actual, expected) in actual.into_iter().zip(expected) {
+            assert_angles_exact(actual, expected);
+            assert_eq!(matching_limits.contains(actual), Ok(true));
+            assert!(actual.first_theta() > PI);
+            assert!(actual.second_theta().abs() > PI);
+        }
+    }
+}
+
+#[test]
+fn refinement_accepts_degenerate_paths_and_subnormal_spacing() {
+    let robot = Scara::new(100.0, 60.0).unwrap();
+    let path = line((160.0, 0.0), (160.0, 0.0));
+
+    for configuration in configurations() {
+        for spacing in [MIN_POSITIVE_STEP, 1.0, f64::MAX] {
+            let mut validated = JointTrajectory::new(&robot, &path, spacing, configuration)
+                .unwrap()
+                .with_max_joint_step(MIN_POSITIVE_STEP)
+                .unwrap()
+                .into_validated_with_refiment(2)
+                .unwrap();
+            let first = unwrap_angles(validated.next());
+            let second = unwrap_angles(validated.next());
+            assert_eq!(second.first_theta(), first.first_theta());
+            assert_eq!(second.second_theta(), first.second_theta());
+            assert_point_close(forward(&robot, first), path.start, 160.0);
+            assert!(validated.next().is_none());
+            assert!(validated.next().is_none());
+        }
+    }
+}
+
+#[test]
+fn refinement_rejects_started_exhausted_and_failed_trajectories_before_checking_budget() {
+    let robot = Scara::new(100.0, 60.0).unwrap();
+    let path = line((160.0, 0.0), (140.0, 0.0));
+    let unreachable = line((0.0, 0.0), (160.0, 0.0));
+
+    for configuration in configurations() {
+        let mut partial = JointTrajectory::new(&robot, &path, 5.0, configuration).unwrap();
+        assert!(partial.next().unwrap().is_ok());
+        let mut exhausted = JointTrajectory::new(&robot, &path, 5.0, configuration).unwrap();
+        assert!(exhausted.by_ref().all(|item| item.is_ok()));
+        assert!(exhausted.next().is_none());
+        let mut failed = JointTrajectory::new(&robot, &unreachable, 5.0, configuration).unwrap();
+        assert_next_error(
+            failed.next(),
+            PlannerError::Kinematics(KinematicsError::UnreachablePoint),
+        );
+        let mut failed_and_exhausted = failed.clone();
+        assert!(failed_and_exhausted.next().is_none());
+
+        for trajectory in [partial, exhausted, failed, failed_and_exhausted] {
+            for budget in [0, 1, 8] {
+                assert_eq!(
+                    trajectory
+                        .clone()
+                        .into_validated_with_refiment(budget)
+                        .unwrap_err(),
+                    PlannerError::TrajectoryAlreadyStarted
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn refinement_exhausts_its_budget_for_unreachable_points_and_joint_limit_violations() {
+    let robot = Scara::new(100.0, 60.0).unwrap();
+    let unreachable_start = line((0.0, 0.0), (160.0, 0.0));
+    let unreachable_interior = line((-160.0, 0.0), (160.0, 0.0));
+    let unreachable_end = line((160.0, 0.0), (200.0, 0.0));
+    let reachable = line((160.0, 0.0), (140.0, 0.0));
+    let restrictive_limits = limits(0.0, 0.0, 0.0, 0.0);
+
+    for configuration in configurations() {
+        for path in [&unreachable_start, &unreachable_interior, &unreachable_end] {
+            let trajectory = JointTrajectory::new(&robot, path, 20.0, configuration).unwrap();
+            assert_eq!(
+                trajectory.clone().validate(),
+                Err(PlannerError::Kinematics(KinematicsError::UnreachablePoint))
+            );
+            for budget in [1, 2, 4] {
+                assert_eq!(
+                    trajectory
+                        .clone()
+                        .into_validated_with_refiment(budget)
+                        .unwrap_err(),
+                    PlannerError::MaxRefimentsAttempsReached
+                );
+            }
+        }
+
+        let trajectory = JointTrajectory::new(&robot, &reachable, 20.0, configuration)
+            .unwrap()
+            .with_limits(&restrictive_limits)
+            .unwrap();
+        assert_eq!(
+            trajectory.clone().validate(),
+            Err(PlannerError::AngleOutOfLimits)
+        );
+        assert_eq!(
+            trajectory.into_validated_with_refiment(4).unwrap_err(),
+            PlannerError::MaxRefimentsAttempsReached
+        );
+    }
+}
+
+#[test]
+fn refinement_exhausts_its_budget_for_numerical_failures() {
+    let path = line((f64::MAX, 0.0), (f64::MAX, 0.0));
+
+    for lengths in [(MIN_POSITIVE_STEP, f64::MAX), (f64::MAX, MIN_POSITIVE_STEP)] {
+        let robot = Scara::new(lengths.0, lengths.1).unwrap();
+        for configuration in configurations() {
+            let trajectory = JointTrajectory::new(&robot, &path, f64::MAX, configuration).unwrap();
+            assert_eq!(
+                trajectory.clone().validate(),
+                Err(PlannerError::Kinematics(KinematicsError::NumericalFailure))
+            );
+            assert_eq!(
+                trajectory.into_validated_with_refiment(4).unwrap_err(),
+                PlannerError::MaxRefimentsAttempsReached
+            );
+        }
+    }
+}
+
+#[test]
+fn refinement_does_not_relax_an_initial_position_step_violation() {
+    let robot = Scara::new(100.0, 60.0).unwrap();
+    let path = line((160.0, 0.0), (160.0, 0.0));
+
+    for configuration in configurations() {
+        let trajectory = JointTrajectory::new(&robot, &path, 1.0, configuration)
+            .unwrap()
+            .with_initial_position(angles(0.1, 0.0), f64::MAX, f64::MAX)
+            .unwrap()
+            .with_max_joint_step(0.01)
+            .unwrap();
+        assert_eq!(
+            trajectory.clone().validate(),
+            Err(PlannerError::MaxJointStepExceeded)
+        );
+        assert_eq!(
+            trajectory.into_validated_with_refiment(8).unwrap_err(),
+            PlannerError::MaxRefimentsAttempsReached
+        );
+    }
+}
+
+fn largest_joint_step(samples: &[JointAngles]) -> f64 {
+    samples
+        .windows(2)
+        .map(|pair| {
+            (pair[1].first_theta() - pair[0].first_theta())
+                .abs()
+                .max((pair[1].second_theta() - pair[0].second_theta()).abs())
+        })
+        .fold(0.0, f64::max)
+}
+
+// These regressions require actual resampling: reducing a stored distance alone
+// cannot repair a MaxJointStepExceeded error in the existing point iterator.
+#[test]
+fn refinement_recovers_a_joint_step_violation_after_one_halving() {
+    let mut failures = Vec::new();
+    for scale in [1e-120, 1.0, 1e120] {
+        let robot = Scara::new(100.0 * scale, 60.0 * scale).unwrap();
+        let path = line((160.0 * scale, 0.0), (140.0 * scale, 0.0));
+        for configuration in configurations() {
+            let coarse = JointTrajectory::new(&robot, &path, 20.0 * scale, configuration).unwrap();
+            let fine = JointTrajectory::new(&robot, &path, 10.0 * scale, configuration).unwrap();
+            let coarse_samples: Vec<_> = coarse.clone().map(Result::unwrap).collect();
+            let fine_samples: Vec<_> = fine.clone().map(Result::unwrap).collect();
+            let coarse_step = largest_joint_step(&coarse_samples);
+            let fine_step = largest_joint_step(&fine_samples);
+            assert!(fine_step < coarse_step);
+            let threshold = (coarse_step + fine_step) / 2.0;
+            let trajectory = coarse.with_max_joint_step(threshold).unwrap();
+
+            assert_eq!(
+                trajectory.clone().validate(),
+                Err(PlannerError::MaxJointStepExceeded)
+            );
+            assert_eq!(
+                fine.with_max_joint_step(threshold).unwrap().validate(),
+                Ok(())
+            );
+            assert_eq!(
+                trajectory
+                    .clone()
+                    .into_validated_with_refiment(0)
+                    .unwrap_err(),
+                PlannerError::MaxRefimentsAttempsReached
+            );
+
+            let validated = match trajectory.into_validated_with_refiment(1) {
+                Ok(validated) => validated,
+                Err(error) => {
+                    failures.push((scale, configuration, error));
+                    continue;
+                }
+            };
+            let actual: Vec<_> = validated.map(Result::unwrap).collect();
+            assert!(actual.len() > coarse_samples.len());
+            assert_eq!(actual.len(), fine_samples.len());
+            assert!(largest_joint_step(&actual) <= threshold);
+            for (actual, expected) in actual.into_iter().zip(fine_samples) {
+                assert_angles_exact(actual, expected);
+            }
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "one halving should repair the excessive joint step: {failures:?}"
+    );
+}
+
+#[test]
+fn refinement_recovers_after_two_halvings_preserving_initial_turns_and_limits() {
+    let robot = Scara::new(100.0, 60.0).unwrap();
+    let path = line((160.0, 0.0), (140.0, 0.0));
+    let mut failures = Vec::new();
+
+    for configuration in configurations() {
+        let initial = angles(core::f64::consts::TAU, -core::f64::consts::TAU);
+        let matching_limits = limits(PI, 3.0 * PI, -3.0 * PI, -PI);
+        let build = |spacing| {
+            JointTrajectory::new(&robot, &path, spacing, configuration)
+                .unwrap()
+                .with_initial_position(initial, 1e-10, 1e-10)
+                .unwrap()
+                .with_limits(&matching_limits)
+                .unwrap()
+        };
+        let middle: Vec<_> = build(10.0).map(Result::unwrap).collect();
+        let expected: Vec<_> = build(5.0).map(Result::unwrap).collect();
+        let middle_step = largest_joint_step(&middle);
+        let fine_step = largest_joint_step(&expected);
+        assert!(fine_step < middle_step);
+        let threshold = (middle_step + fine_step) / 2.0;
+
+        for spacing in [20.0, 10.0] {
+            assert_eq!(
+                build(spacing)
+                    .with_max_joint_step(threshold)
+                    .unwrap()
+                    .validate(),
+                Err(PlannerError::MaxJointStepExceeded)
+            );
+        }
+        assert_eq!(
+            build(5.0)
+                .with_max_joint_step(threshold)
+                .unwrap()
+                .validate(),
+            Ok(())
+        );
+        let trajectory = build(20.0).with_max_joint_step(threshold).unwrap();
+        assert_eq!(
+            trajectory
+                .clone()
+                .into_validated_with_refiment(1)
+                .unwrap_err(),
+            PlannerError::MaxRefimentsAttempsReached
+        );
+
+        let validated = match trajectory.into_validated_with_refiment(2) {
+            Ok(validated) => validated,
+            Err(error) => {
+                failures.push((configuration, error));
+                continue;
+            }
+        };
+        let actual: Vec<_> = validated.map(Result::unwrap).collect();
+        assert_eq!(actual.len(), expected.len());
+        assert!(largest_joint_step(&actual) <= threshold);
+        for (actual, expected) in actual.into_iter().zip(expected) {
+            assert_angles_exact(actual, expected);
+            assert_eq!(matching_limits.contains(actual), Ok(true));
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "two halvings should repair the excessive joint step: {failures:?}"
+    );
+}

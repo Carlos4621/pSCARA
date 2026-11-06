@@ -12,6 +12,7 @@ pub struct JointTrajectory<'a> {
     previous_angle: Option<JointAngles>,
     limits: Option<&'a JointLimits>,
     max_joint_step: Option<f64>,
+    max_point_distance: f64,
     has_started: bool,
 }
 
@@ -34,6 +35,7 @@ impl<'a> JointTrajectory<'a> {
             previous_angle: None,
             limits: None,
             max_joint_step: None,
+            max_point_distance,
             has_started: false,
         })
     }
@@ -120,6 +122,34 @@ impl<'a> JointTrajectory<'a> {
         self.clone().validate()?;
 
         Ok(ValidatedTrajectory::new(self))
+    }
+
+    pub fn into_validated_with_refiment(
+        mut self,
+        max_refiments: usize,
+    ) -> Result<ValidatedTrajectory<'a>, PlannerError> {
+        if self.has_started {
+            return Err(PlannerError::TrajectoryAlreadyStarted);
+        }
+
+        for refinement in 0..=max_refiments {
+            if !self.clone().validate().is_err() {
+                return Ok(ValidatedTrajectory::new(self));
+            }
+
+            if refinement == max_refiments {
+                break;
+            }
+
+            self.max_point_distance /= 2.0;
+            self.trajectory_points = self
+                .trajectory_points
+                .get_segment()
+                .points(self.max_point_distance)
+                .map_err(PlannerError::Trajectory)?;
+        }
+
+        Err(PlannerError::MaxRefimentsAttempsReached)
     }
 
     fn unwrap_angle(previous: f64, next: f64) -> Result<f64, PlannerError> {

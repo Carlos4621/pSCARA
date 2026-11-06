@@ -101,7 +101,7 @@ fn new_propagates_invalid_maximum_distance_errors_exactly() {
     ] {
         assert_eq!(
             JointTrajectory::new(&robot, &path, maximum, ElbowConfiguration::Positive).unwrap_err(),
-            PlannerError::Trajectory(TrajectoryError::InvalidMaxPointDitance)
+            PlannerError::Trajectory(TrajectoryError::InvalidMaxPointDistance)
         );
     }
 }
@@ -1553,10 +1553,10 @@ fn refinement_preserves_the_complete_valid_trajectory_without_adding_samples() {
         let trajectory = JointTrajectory::new(&robot, &path, 7.0, configuration).unwrap();
         let expected: Vec<_> = trajectory.clone().map(Result::unwrap).collect();
 
-        for budget in [0, 1, 2, 8] {
+        for budget in [0, 1, 2, 8, usize::MAX] {
             let mut validated = trajectory
                 .clone()
-                .into_validated_with_refiment(budget)
+                .into_validated_with_refinement(budget)
                 .unwrap();
             let _: &ValidatedTrajectory<'_> = &validated;
             let actual: Vec<_> = validated.by_ref().map(Result::unwrap).collect();
@@ -1580,7 +1580,7 @@ fn refinement_with_zero_attempts_accepts_a_valid_path_without_consuming_it() {
         assert_eq!(trajectory.clone().validate(), Ok(()));
         let expected: Vec<_> = trajectory.clone().map(Result::unwrap).collect();
         let actual: Vec<_> = trajectory
-            .into_validated_with_refiment(0)
+            .into_validated_with_refinement(0)
             .expect("a valid trajectory should not require refinement attempts")
             .map(Result::unwrap)
             .collect();
@@ -1606,8 +1606,8 @@ fn refinement_with_zero_attempts_rejects_a_path_that_requires_refinement() {
             Err(PlannerError::MaxJointStepExceeded)
         );
         assert_eq!(
-            trajectory.into_validated_with_refiment(0).unwrap_err(),
-            PlannerError::MaxRefimentsAttempsReached
+            trajectory.into_validated_with_refinement(0).unwrap_err(),
+            PlannerError::MaxRefinementAttemptsReached
         );
     }
 }
@@ -1639,7 +1639,7 @@ fn refinement_preserves_initial_turns_limits_and_branch_cut_unwrapping() {
             .unwrap();
         let expected: Vec<_> = trajectory.clone().map(Result::unwrap).collect();
         let actual: Vec<_> = trajectory
-            .into_validated_with_refiment(4)
+            .into_validated_with_refinement(4)
             .unwrap()
             .map(Result::unwrap)
             .collect();
@@ -1665,7 +1665,7 @@ fn refinement_accepts_degenerate_paths_and_subnormal_spacing() {
                 .unwrap()
                 .with_max_joint_step(MIN_POSITIVE_STEP)
                 .unwrap()
-                .into_validated_with_refiment(2)
+                .into_validated_with_refinement(2)
                 .unwrap();
             let first = unwrap_angles(validated.next());
             let second = unwrap_angles(validated.next());
@@ -1703,7 +1703,7 @@ fn refinement_rejects_started_exhausted_and_failed_trajectories_before_checking_
                 assert_eq!(
                     trajectory
                         .clone()
-                        .into_validated_with_refiment(budget)
+                        .into_validated_with_refinement(budget)
                         .unwrap_err(),
                     PlannerError::TrajectoryAlreadyStarted
                 );
@@ -1713,7 +1713,7 @@ fn refinement_rejects_started_exhausted_and_failed_trajectories_before_checking_
 }
 
 #[test]
-fn refinement_exhausts_its_budget_for_unreachable_points_and_joint_limit_violations() {
+fn refinement_preserves_unreachable_point_and_joint_limit_errors_without_retrying() {
     let robot = Scara::new(100.0, 60.0).unwrap();
     let unreachable_start = line((0.0, 0.0), (160.0, 0.0));
     let unreachable_interior = line((-160.0, 0.0), (160.0, 0.0));
@@ -1728,13 +1728,13 @@ fn refinement_exhausts_its_budget_for_unreachable_points_and_joint_limit_violati
                 trajectory.clone().validate(),
                 Err(PlannerError::Kinematics(KinematicsError::UnreachablePoint))
             );
-            for budget in [1, 2, 4] {
+            for budget in [0, 1, 4, usize::MAX] {
                 assert_eq!(
                     trajectory
                         .clone()
-                        .into_validated_with_refiment(budget)
+                        .into_validated_with_refinement(budget)
                         .unwrap_err(),
-                    PlannerError::MaxRefimentsAttempsReached
+                    PlannerError::Kinematics(KinematicsError::UnreachablePoint)
                 );
             }
         }
@@ -1747,15 +1747,20 @@ fn refinement_exhausts_its_budget_for_unreachable_points_and_joint_limit_violati
             trajectory.clone().validate(),
             Err(PlannerError::AngleOutOfLimits)
         );
-        assert_eq!(
-            trajectory.into_validated_with_refiment(4).unwrap_err(),
-            PlannerError::MaxRefimentsAttempsReached
-        );
+        for budget in [0, 1, 4, usize::MAX] {
+            assert_eq!(
+                trajectory
+                    .clone()
+                    .into_validated_with_refinement(budget)
+                    .unwrap_err(),
+                PlannerError::AngleOutOfLimits
+            );
+        }
     }
 }
 
 #[test]
-fn refinement_exhausts_its_budget_for_numerical_failures() {
+fn refinement_preserves_numerical_failures_without_retrying() {
     let path = line((f64::MAX, 0.0), (f64::MAX, 0.0));
 
     for lengths in [(MIN_POSITIVE_STEP, f64::MAX), (f64::MAX, MIN_POSITIVE_STEP)] {
@@ -1766,10 +1771,15 @@ fn refinement_exhausts_its_budget_for_numerical_failures() {
                 trajectory.clone().validate(),
                 Err(PlannerError::Kinematics(KinematicsError::NumericalFailure))
             );
-            assert_eq!(
-                trajectory.into_validated_with_refiment(4).unwrap_err(),
-                PlannerError::MaxRefimentsAttempsReached
-            );
+            for budget in [0, 1, 4, usize::MAX] {
+                assert_eq!(
+                    trajectory
+                        .clone()
+                        .into_validated_with_refinement(budget)
+                        .unwrap_err(),
+                    PlannerError::Kinematics(KinematicsError::NumericalFailure)
+                );
+            }
         }
     }
 }
@@ -1791,8 +1801,8 @@ fn refinement_does_not_relax_an_initial_position_step_violation() {
             Err(PlannerError::MaxJointStepExceeded)
         );
         assert_eq!(
-            trajectory.into_validated_with_refiment(8).unwrap_err(),
-            PlannerError::MaxRefimentsAttempsReached
+            trajectory.into_validated_with_refinement(8).unwrap_err(),
+            PlannerError::MaxRefinementAttemptsReached
         );
     }
 }
@@ -1838,12 +1848,12 @@ fn refinement_recovers_a_joint_step_violation_after_one_halving() {
             assert_eq!(
                 trajectory
                     .clone()
-                    .into_validated_with_refiment(0)
+                    .into_validated_with_refinement(0)
                     .unwrap_err(),
-                PlannerError::MaxRefimentsAttempsReached
+                PlannerError::MaxRefinementAttemptsReached
             );
 
-            let validated = match trajectory.into_validated_with_refiment(1) {
+            let validated = match trajectory.into_validated_with_refinement(1) {
                 Ok(validated) => validated,
                 Err(error) => {
                     failures.push((scale, configuration, error));
@@ -1909,12 +1919,12 @@ fn refinement_recovers_after_two_halvings_preserving_initial_turns_and_limits() 
         assert_eq!(
             trajectory
                 .clone()
-                .into_validated_with_refiment(1)
+                .into_validated_with_refinement(1)
                 .unwrap_err(),
-            PlannerError::MaxRefimentsAttempsReached
+            PlannerError::MaxRefinementAttemptsReached
         );
 
-        let validated = match trajectory.into_validated_with_refiment(2) {
+        let validated = match trajectory.into_validated_with_refinement(2) {
             Ok(validated) => validated,
             Err(error) => {
                 failures.push((configuration, error));
@@ -1933,4 +1943,139 @@ fn refinement_recovers_after_two_halvings_preserving_initial_turns_and_limits() 
         failures.is_empty(),
         "two halvings should repair the excessive joint step: {failures:?}"
     );
+}
+
+#[test]
+fn refinement_rejects_spacing_that_underflows_to_zero() {
+    let robot = Scara::new(100.0, 60.0).unwrap();
+    let path = line((160.0, 0.0), (160.0, 0.0));
+    assert_eq!(MIN_POSITIVE_STEP / 2.0, 0.0);
+
+    for configuration in configurations() {
+        let trajectory = JointTrajectory::new(&robot, &path, MIN_POSITIVE_STEP, configuration)
+            .unwrap()
+            .with_initial_position(angles(0.1, 0.0), f64::MAX, f64::MAX)
+            .unwrap()
+            .with_max_joint_step(0.01)
+            .unwrap();
+        assert_eq!(
+            trajectory.clone().validate(),
+            Err(PlannerError::MaxJointStepExceeded)
+        );
+        // No refinement budget means no attempt to halve the spacing.
+        assert_eq!(
+            trajectory
+                .clone()
+                .into_validated_with_refinement(0)
+                .unwrap_err(),
+            PlannerError::MaxRefinementAttemptsReached
+        );
+        assert_eq!(
+            trajectory.into_validated_with_refinement(1).unwrap_err(),
+            PlannerError::Kinematics(KinematicsError::NumericalFailure)
+        );
+    }
+}
+
+#[test]
+fn refinement_propagates_too_many_segments_when_resampling() {
+    let robot = Scara::new(100.0, 60.0).unwrap();
+    let path = line((160.0, 0.0), (159.0, 0.0));
+    let spacing = 2.0_f64.powi(1 - usize::BITS as i32);
+    assert!(path.points(spacing).is_ok());
+    assert!(matches!(
+        path.points(spacing / 2.0),
+        Err(TrajectoryError::TooManySegments)
+    ));
+
+    for configuration in configurations() {
+        let trajectory = JointTrajectory::new(&robot, &path, spacing, configuration)
+            .unwrap()
+            .with_initial_position(angles(0.1, 0.0), f64::MAX, f64::MAX)
+            .unwrap()
+            .with_max_joint_step(0.01)
+            .unwrap();
+        // Fail at the first point rather than iterating a huge sample count.
+        assert_eq!(
+            trajectory.clone().validate(),
+            Err(PlannerError::MaxJointStepExceeded)
+        );
+        assert_eq!(
+            trajectory
+                .clone()
+                .into_validated_with_refinement(0)
+                .unwrap_err(),
+            PlannerError::MaxRefinementAttemptsReached
+        );
+        assert_eq!(
+            trajectory.into_validated_with_refinement(1).unwrap_err(),
+            PlannerError::Trajectory(TrajectoryError::TooManySegments)
+        );
+    }
+}
+
+#[test]
+fn refinement_propagates_unreachable_points_discovered_after_resampling() {
+    let robot = Scara::new(100.0, 60.0).unwrap();
+    let path = line((-160.0, 0.0), (160.0, 0.0));
+
+    for configuration in configurations() {
+        let trajectory = JointTrajectory::new(&robot, &path, 320.0, configuration)
+            .unwrap()
+            .with_max_joint_step(1.0)
+            .unwrap();
+        assert_eq!(
+            trajectory.clone().validate(),
+            Err(PlannerError::MaxJointStepExceeded)
+        );
+        assert_eq!(
+            JointTrajectory::new(&robot, &path, 160.0, configuration)
+                .unwrap()
+                .with_max_joint_step(1.0)
+                .unwrap()
+                .validate(),
+            Err(PlannerError::Kinematics(KinematicsError::UnreachablePoint))
+        );
+        assert_eq!(
+            trajectory.into_validated_with_refinement(1).unwrap_err(),
+            PlannerError::Kinematics(KinematicsError::UnreachablePoint)
+        );
+    }
+}
+
+#[test]
+fn refinement_propagates_joint_limit_violations_discovered_after_resampling() {
+    let robot = Scara::new(100.0, 60.0).unwrap();
+    let path = line((160.0, 0.0), (140.0, 0.0));
+    let restrictive_limits = limits(0.0, 0.0, 0.0, 0.0);
+
+    for configuration in configurations() {
+        let coarse = JointTrajectory::new(&robot, &path, 20.0, configuration).unwrap();
+        let fine = JointTrajectory::new(&robot, &path, 10.0, configuration).unwrap();
+        let coarse_samples: Vec<_> = coarse.clone().map(Result::unwrap).collect();
+        let fine_samples: Vec<_> = fine.clone().map(Result::unwrap).collect();
+        let threshold =
+            (largest_joint_step(&coarse_samples) + largest_joint_step(&fine_samples)) / 2.0;
+        let trajectory = coarse
+            .with_limits(&restrictive_limits)
+            .unwrap()
+            .with_max_joint_step(threshold)
+            .unwrap();
+        assert_eq!(
+            trajectory.clone().validate(),
+            Err(PlannerError::MaxJointStepExceeded)
+        );
+        assert_eq!(
+            fine.with_limits(&restrictive_limits)
+                .unwrap()
+                .with_max_joint_step(threshold)
+                .unwrap()
+                .validate(),
+            Err(PlannerError::AngleOutOfLimits)
+        );
+        assert_eq!(
+            trajectory.into_validated_with_refinement(1).unwrap_err(),
+            PlannerError::AngleOutOfLimits
+        );
+    }
 }

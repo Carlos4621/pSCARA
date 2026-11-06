@@ -13,5 +13,5 @@ pub enum PlannerError {
     TrajectoryAlreadyStarted,
     InvalidMaxJointStep,
     MaxJointStepExceeded,
-    MaxRefimentsAttempsReached,
+    MaxRefinementAttemptsReached,
 }

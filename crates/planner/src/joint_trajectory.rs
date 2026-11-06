@@ -1,4 +1,8 @@
-use kinematics::{ElbowConfiguration, JointAngles, Scara};
+use kinematics::{
+    ElbowConfiguration, JointAngles,
+    KinematicsError::{self},
+    Scara,
+};
 use trajectory::{LineSegment, TrajectoryPoints};
 
 use crate::{JointLimits, PlannerError, ValidatedTrajectory};
@@ -41,8 +45,8 @@ impl<'a> JointTrajectory<'a> {
     }
 
     pub fn with_limits(mut self, joint_limits: &'a JointLimits) -> Result<Self, PlannerError> {
-        if let Some(previus) = self.previous_angle
-            && !joint_limits.contains(previus)?
+        if let Some(previous) = self.previous_angle
+            && !joint_limits.contains(previous)?
         {
             return Err(PlannerError::AngleOutOfLimits);
         }
@@ -124,24 +128,36 @@ impl<'a> JointTrajectory<'a> {
         Ok(ValidatedTrajectory::new(self))
     }
 
-    pub fn into_validated_with_refiment(
+    pub fn into_validated_with_refinement(
         mut self,
-        max_refiments: usize,
+        max_refinements: usize,
     ) -> Result<ValidatedTrajectory<'a>, PlannerError> {
         if self.has_started {
             return Err(PlannerError::TrajectoryAlreadyStarted);
         }
 
-        for refinement in 0..=max_refiments {
-            if !self.clone().validate().is_err() {
-                return Ok(ValidatedTrajectory::new(self));
+        for refinement in 0..=max_refinements {
+            match self.clone().validate() {
+                Ok(_) => return Ok(ValidatedTrajectory::new(self)),
+                Err(PlannerError::MaxJointStepExceeded) => {}
+                Err(error) => return Err(error),
             }
 
-            if refinement == max_refiments {
+            if refinement == max_refinements {
                 break;
             }
 
-            self.max_point_distance /= 2.0;
+            let next_point_distance = self.max_point_distance / 2.0;
+
+            if !next_point_distance.is_finite()
+                || next_point_distance <= 0.0
+                || next_point_distance > self.max_point_distance
+            {
+                return Err(PlannerError::Kinematics(KinematicsError::NumericalFailure));
+            }
+
+            self.max_point_distance = next_point_distance;
+
             self.trajectory_points = self
                 .trajectory_points
                 .get_segment()
@@ -149,7 +165,7 @@ impl<'a> JointTrajectory<'a> {
                 .map_err(PlannerError::Trajectory)?;
         }
 
-        Err(PlannerError::MaxRefimentsAttempsReached)
+        Err(PlannerError::MaxRefinementAttemptsReached)
     }
 
     fn unwrap_angle(previous: f64, next: f64) -> Result<f64, PlannerError> {

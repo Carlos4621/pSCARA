@@ -36,7 +36,7 @@ impl LineSegment {
 
     pub fn points(&self, max_point_distance: f64) -> Result<TrajectoryPoints<'_>, TrajectoryError> {
         if !max_point_distance.is_finite() || max_point_distance <= 0.0 {
-            return Err(TrajectoryError::InvalidMaxPointDitance);
+            return Err(TrajectoryError::InvalidMaxPointDistance);
         }
 
         let length = self.length()?;

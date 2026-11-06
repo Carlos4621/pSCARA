@@ -122,7 +122,7 @@ fn points_rejects_every_non_positive_or_non_finite_maximum_distance() {
     ] {
         assert!(matches!(
             line.points(maximum),
-            Err(TrajectoryError::InvalidMaxPointDitance)
+            Err(TrajectoryError::InvalidMaxPointDistance)
         ));
     }
 }

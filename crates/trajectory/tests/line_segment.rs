@@ -43,7 +43,7 @@ fn assert_segment_point_non_finite(result: Result<Point, TrajectoryError>) {
 fn length(line: &LineSegment) -> f64 {
     match line.length() {
         Ok(length) => length,
-        Err(_) => panic!("lenght() unexpectedly returned an error"),
+        Err(_) => panic!("length() unexpectedly returned an error"),
     }
 }
 
@@ -52,7 +52,7 @@ fn assert_segment_non_finite(result: Result<f64, TrajectoryError>) {
 }
 
 #[test]
-fn lenght_matches_known_horizontal_vertical_and_diagonal_distances() {
+fn length_matches_known_horizontal_vertical_and_diagonal_distances() {
     for (start, end, expected) in [
         ((0.0, 0.0), (3.0, 4.0), 5.0),
         ((3.0, 4.0), (0.0, 0.0), 5.0),
@@ -65,7 +65,7 @@ fn lenght_matches_known_horizontal_vertical_and_diagonal_distances() {
 }
 
 #[test]
-fn lenght_is_zero_for_degenerate_segments_across_finite_scales() {
+fn length_is_zero_for_degenerate_segments_across_finite_scales() {
     for coordinate in [
         -f64::MAX,
         -1.0,
@@ -87,7 +87,7 @@ fn lenght_is_zero_for_degenerate_segments_across_finite_scales() {
 }
 
 #[test]
-fn lenght_is_invariant_under_endpoint_reversal_and_coordinate_swapping() {
+fn length_is_invariant_under_endpoint_reversal_and_coordinate_swapping() {
     for (start, end) in [
         ((-8.0, 3.0), (4.0, -13.0)),
         ((f64::MIN_POSITIVE, 0.0), (0.0, f64::MIN_POSITIVE)),
@@ -103,7 +103,7 @@ fn lenght_is_invariant_under_endpoint_reversal_and_coordinate_swapping() {
 }
 
 #[test]
-fn lenght_uses_scale_safe_hypotenuse_calculation() {
+fn length_uses_scale_safe_hypotenuse_calculation() {
     for scale in [
         f64::from_bits(1),
         f64::MIN_POSITIVE,
@@ -118,7 +118,7 @@ fn lenght_uses_scale_safe_hypotenuse_calculation() {
 }
 
 #[test]
-fn lenght_rejects_unrepresentable_distances() {
+fn length_rejects_unrepresentable_distances() {
     for line in [
         segment((-f64::MAX, 0.0), (f64::MAX, 0.0)),
         segment((0.0, -f64::MAX), (0.0, f64::MAX)),

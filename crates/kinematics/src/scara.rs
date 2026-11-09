@@ -106,27 +106,36 @@ impl Scara {
             .abs()
             .max(first_point.y().abs())
             .max(self.first_arm_length)
-            .max(self.second_arm_length);
+            .max(self.second_arm_length)
+            .max(second_point.x().abs())
+            .max(second_point.y().abs());
 
         let a = Point::new(first_point.x() / scale, first_point.y() / scale)?;
         let b = Point::new(second_point.x() / scale, second_point.y() / scale)?;
 
         let d = (b - a)?;
-        let ad = (a * d)?;
-        let dd = (d * d)?;
 
-        if dd == 0.0 {
+        let d_lenght = d.distance_from_origin();
+
+        if d_lenght == 0.0 {
             return Err(KinematicsError::NumericalFailure);
         }
 
-        let t = (-(ad / dd)).clamp(0.0, 1.0);
+        let u = Point::new(d.x() / d_lenght, d.y() / d_lenght)?;
+
+        let h = (-a * u)?;
+
+        let t = (h / d_lenght).clamp(0.0, 1.0);
 
         let p = (a + (d.scale(t)?))?;
 
         let min_r = p.distance_from_origin();
 
-        let min_reachable = self.min_reachable_distance() / scale;
-        let tolerance = self.max_tolerance_distance() / scale;
+        let l1 = self.first_arm_length / scale;
+        let l2 = self.second_arm_length / scale;
+
+        let min_reachable = (l1 - l2).abs();
+        let tolerance = Self::MAX_NUMERICAL_TOLERANCE_FACTOR * f64::EPSILON * (l1 + l2);
 
         Ok(min_r >= (min_reachable - tolerance))
     }

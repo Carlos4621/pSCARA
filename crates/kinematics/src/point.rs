@@ -1,4 +1,4 @@
-use core::ops::{Add, Mul, Sub};
+use core::ops::{Add, Mul, Neg, Sub};
 
 use crate::KinematicsError;
 
@@ -85,5 +85,16 @@ impl Mul for Point {
         }
 
         Ok(result)
+    }
+}
+
+impl Neg for Point {
+    type Output = Self;
+
+    fn neg(self) -> Self::Output {
+        Self {
+            x: -self.x,
+            y: -self.y,
+        }
     }
 }

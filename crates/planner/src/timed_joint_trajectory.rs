@@ -1,6 +1,9 @@
 use kinematics::JointAngles;
 
-use crate::{JointVelocityLimits, PlannerError, ValidatedTrajectory};
+use crate::{
+    JointVelocityLimits, PlannerError, ValidatedTrajectory,
+    validated_timed_trajectory::ValidatedTimedTrajectory,
+};
 
 #[derive(Debug, Clone, Copy)]
 pub struct TimedJointSample {
@@ -8,13 +11,14 @@ pub struct TimedJointSample {
     pub time_elapsed: f64,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TimedJointTrajectory<'a> {
     trajectory: ValidatedTrajectory<'a>,
     velocity_limits: JointVelocityLimits,
     previous_angle: Option<JointAngles>,
     time_elapsed: f64,
     is_finished: bool,
+    has_started: bool,
 }
 
 impl<'a> TimedJointTrajectory<'a> {
@@ -25,7 +29,26 @@ impl<'a> TimedJointTrajectory<'a> {
             previous_angle: None,
             time_elapsed: 0.0,
             is_finished: false,
+            has_started: false,
         }
+    }
+
+    pub fn validate(self) -> Result<(), PlannerError> {
+        if self.has_started {
+            return Err(PlannerError::TrajectoryAlreadyStarted);
+        }
+
+        for n in self {
+            n?;
+        }
+
+        Ok(())
+    }
+
+    pub fn into_validated(self) -> Result<ValidatedTimedTrajectory<'a>, PlannerError> {
+        self.clone().validate()?;
+
+        Ok(ValidatedTimedTrajectory::new(self))
     }
 }
 
@@ -33,6 +56,10 @@ impl Iterator for TimedJointTrajectory<'_> {
     type Item = Result<TimedJointSample, PlannerError>;
 
     fn next(&mut self) -> Option<Self::Item> {
+        if !self.has_started {
+            self.has_started = true;
+        }
+
         if self.is_finished {
             return None;
         }

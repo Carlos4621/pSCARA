@@ -2,7 +2,7 @@ use kinematics::JointAngles;
 
 use crate::{JointTrajectory, PlannerError};
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ValidatedTrajectory<'a> {
     trajectory: JointTrajectory<'a>,
 }

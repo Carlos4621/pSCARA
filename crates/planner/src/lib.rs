@@ -20,3 +20,6 @@ pub use joint_velocity_limits::JointVelocityLimits;
 
 mod timed_joint_trajectory;
 pub use timed_joint_trajectory::{TimedJointSample, TimedJointTrajectory};
+
+mod validated_timed_trajectory;
+pub use validated_timed_trajectory::ValidatedTimedTrajectory;

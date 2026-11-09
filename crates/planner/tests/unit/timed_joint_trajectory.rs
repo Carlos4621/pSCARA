@@ -70,7 +70,23 @@ fn regression_an_upstream_error_is_returned_once_after_a_valid_prefix() {
         let injected = ValidatedTrajectory::new(source);
         let mut timed =
             TimedJointTrajectory::new(injected, JointVelocityLimits::new(1.0, 1.0).unwrap());
+        assert_eq!(
+            timed.clone().validate(),
+            Err(PlannerError::AngleOutOfLimits)
+        );
+        assert_eq!(
+            timed.clone().into_validated().unwrap_err(),
+            PlannerError::AngleOutOfLimits
+        );
         assert!(matches!(timed.next(), Some(Ok(_))));
+        assert_eq!(
+            timed.clone().validate(),
+            Err(PlannerError::TrajectoryAlreadyStarted)
+        );
+        assert_eq!(
+            timed.clone().into_validated().unwrap_err(),
+            PlannerError::TrajectoryAlreadyStarted
+        );
         match timed.next() {
             Some(Err(error)) => assert_eq!(error, PlannerError::AngleOutOfLimits),
             Some(Ok(sample)) => panic!(

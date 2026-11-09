@@ -2,7 +2,7 @@ use kinematics::JointAngles;
 
 use crate::PlannerError;
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct JointVelocityLimits {
     first_joint_max_velocity: f64,
     second_joint_max_velocity: f64,

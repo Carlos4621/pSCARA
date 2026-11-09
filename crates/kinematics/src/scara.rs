@@ -101,8 +101,18 @@ impl Scara {
             return Ok(true);
         }
 
-        let d = (second_point - first_point)?;
-        let ad = (first_point * d)?;
+        let scale = first_point
+            .x()
+            .abs()
+            .max(first_point.y().abs())
+            .max(self.first_arm_length)
+            .max(self.second_arm_length);
+
+        let a = Point::new(first_point.x() / scale, first_point.y() / scale)?;
+        let b = Point::new(second_point.x() / scale, second_point.y() / scale)?;
+
+        let d = (b - a)?;
+        let ad = (a * d)?;
         let dd = (d * d)?;
 
         if dd == 0.0 {
@@ -111,15 +121,14 @@ impl Scara {
 
         let t = (-(ad / dd)).clamp(0.0, 1.0);
 
-        let p = (first_point + (d.scale(t)?))?;
+        let p = (a + (d.scale(t)?))?;
 
         let min_r = p.distance_from_origin();
 
-        let max_r = first_point
-            .distance_from_origin()
-            .max(second_point.distance_from_origin());
+        let min_reachable = self.min_reachable_distance() / scale;
+        let tolerance = self.max_tolerance_distance() / scale;
 
-        Ok(min_r >= self.min_reachable_distance() && max_r <= self.max_reachable_distance())
+        Ok(min_r >= (min_reachable - tolerance))
     }
 
     const fn is_valid_arm_length(length: f64) -> bool {

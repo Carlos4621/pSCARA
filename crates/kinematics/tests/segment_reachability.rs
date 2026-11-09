@@ -1,4 +1,4 @@
-use kinematics::{KinematicsError, Point, Scara};
+use kinematics::{Point, Scara};
 
 fn point(x: f64, y: f64) -> Point {
     Point::new(x, y).expect("test coordinates must be finite")
@@ -95,23 +95,23 @@ fn equal_arms_have_no_inner_hole_so_a_diameter_is_reachable() {
 }
 
 #[test]
-fn reports_numerical_failure_when_squared_coordinates_underflow() {
+fn normalized_chord_is_reachable_when_raw_squared_coordinates_underflow() {
     let scale = 1e-200;
     let scara = robot(scale, scale);
 
     assert_eq!(
         scara.is_segment_reachable(point(scale, 0.0), point(0.0, scale)),
-        Err(KinematicsError::NumericalFailure)
+        Ok(true)
     );
 }
 
 #[test]
-fn reports_numerical_failure_when_squared_coordinates_overflow() {
+fn normalized_chord_is_reachable_when_raw_squared_coordinates_overflow() {
     let scale = 1e200;
     let scara = robot(scale, scale);
 
     assert_eq!(
         scara.is_segment_reachable(point(scale, 0.0), point(0.0, scale)),
-        Err(KinematicsError::NumericalFailure)
+        Ok(true)
     );
 }

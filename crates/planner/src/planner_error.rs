@@ -17,4 +17,5 @@ pub enum PlannerError {
     SegmentUnreachable,
     InvalidJointVelocity,
     NumericalFailure,
+    TimeElapsedOverflow,
 }

@@ -17,3 +17,6 @@ pub use validated_trajectory::ValidatedTrajectory;
 
 mod joint_velocity_limits;
 pub use joint_velocity_limits::JointVelocityLimits;
+
+mod timed_joint_trajectory;
+pub use timed_joint_trajectory::{TimedJointSample, TimedJointTrajectory};

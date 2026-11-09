@@ -88,6 +88,40 @@ impl Scara {
         JointAngles::new(first_theta, second_theta).map_err(|_| KinematicsError::NumericalFailure)
     }
 
+    pub fn is_segment_reachable(
+        &self,
+        first_point: Point,
+        second_point: Point,
+    ) -> Result<bool, KinematicsError> {
+        if !self.is_reachable_point(first_point) || !self.is_reachable_point(second_point) {
+            return Ok(false);
+        }
+
+        if first_point == second_point {
+            return Ok(true);
+        }
+
+        let d = (second_point - first_point)?;
+        let ad = (first_point * d)?;
+        let dd = (d * d)?;
+
+        if dd == 0.0 {
+            return Err(KinematicsError::NumericalFailure);
+        }
+
+        let t = (-(ad / dd)).clamp(0.0, 1.0);
+
+        let p = (first_point + (d.scale(t)?))?;
+
+        let min_r = p.distance_from_origin();
+
+        let max_r = first_point
+            .distance_from_origin()
+            .max(second_point.distance_from_origin());
+
+        Ok(min_r >= self.min_reachable_distance() && max_r <= self.max_reachable_distance())
+    }
+
     const fn is_valid_arm_length(length: f64) -> bool {
         length.is_finite() && length > 0.0
     }

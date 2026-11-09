@@ -115,6 +115,17 @@ impl<'a> JointTrajectory<'a> {
             return Err(PlannerError::TrajectoryAlreadyStarted);
         }
 
+        if !self
+            .scara
+            .is_segment_reachable(
+                self.trajectory_points.get_segment().start,
+                self.trajectory_points.get_segment().end,
+            )
+            .map_err(PlannerError::Kinematics)?
+        {
+            return Err(PlannerError::SegmentDontReachable);
+        }
+
         for n in self {
             n?;
         }

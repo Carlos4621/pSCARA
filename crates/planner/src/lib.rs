@@ -14,3 +14,6 @@ pub use joint_limits::JointLimits;
 
 mod validated_trajectory;
 pub use validated_trajectory::ValidatedTrajectory;
+
+mod joint_velocity;
+pub use joint_velocity::JointVelocity;

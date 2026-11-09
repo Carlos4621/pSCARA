@@ -31,6 +31,16 @@ impl<'a> JointTrajectory<'a> {
             .points(max_point_distance)
             .map_err(PlannerError::Trajectory)?;
 
+        if !scara
+            .is_segment_reachable(
+                trajectory_points.get_segment().start,
+                trajectory_points.get_segment().end,
+            )
+            .map_err(PlannerError::Kinematics)?
+        {
+            return Err(PlannerError::SegmentUnreachable);
+        }
+
         Ok(Self {
             scara,
             trajectory_points,
@@ -113,17 +123,6 @@ impl<'a> JointTrajectory<'a> {
     pub fn validate(self) -> Result<(), PlannerError> {
         if self.has_started {
             return Err(PlannerError::TrajectoryAlreadyStarted);
-        }
-
-        if !self
-            .scara
-            .is_segment_reachable(
-                self.trajectory_points.get_segment().start,
-                self.trajectory_points.get_segment().end,
-            )
-            .map_err(PlannerError::Kinematics)?
-        {
-            return Err(PlannerError::SegmentDontReachable);
         }
 
         for n in self {

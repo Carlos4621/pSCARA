@@ -14,5 +14,5 @@ pub enum PlannerError {
     InvalidMaxJointStep,
     MaxJointStepExceeded,
     MaxRefinementAttemptsReached,
-    SegmentDontReachable,
+    SegmentUnreachable,
 }

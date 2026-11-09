@@ -100,24 +100,30 @@ fn assert_validation_error(trajectory: &JointTrajectory<'_>, expected: PlannerEr
 }
 
 #[test]
-fn new_propagates_invalid_maximum_distance_errors_exactly() {
+fn new_propagates_invalid_maximum_distance_errors_before_checking_reachability() {
     let robot = Scara::new(100.0, 60.0).unwrap();
-    let path = line((40.0, 0.0), (160.0, 0.0));
-
-    for maximum in [
-        f64::NEG_INFINITY,
-        -f64::MAX,
-        -1.0,
-        -f64::from_bits(1),
-        -0.0,
-        0.0,
-        f64::NAN,
-        f64::INFINITY,
+    for path in [
+        line((40.0, 0.0), (160.0, 0.0)),
+        line((0.0, 0.0), (160.0, 0.0)),
+        line((-160.0, 0.0), (160.0, 0.0)),
     ] {
-        assert_eq!(
-            JointTrajectory::new(&robot, &path, maximum, ElbowConfiguration::Positive).unwrap_err(),
-            PlannerError::Trajectory(TrajectoryError::InvalidMaxPointDistance)
-        );
+        for maximum in [
+            f64::NEG_INFINITY,
+            -f64::MAX,
+            -1.0,
+            -f64::from_bits(1),
+            -0.0,
+            0.0,
+            f64::NAN,
+            f64::INFINITY,
+        ] {
+            for configuration in configurations() {
+                assert_eq!(
+                    JointTrajectory::new(&robot, &path, maximum, configuration).unwrap_err(),
+                    PlannerError::Trajectory(TrajectoryError::InvalidMaxPointDistance)
+                );
+            }
+        }
     }
 }
 
@@ -313,44 +319,6 @@ fn degenerate_reachable_path_emits_both_endpoint_samples_then_stays_finished() {
     }
     assert!(trajectory.next().is_none());
     assert!(trajectory.next().is_none());
-}
-
-#[test]
-fn unreachable_start_is_returned_once_then_the_iterator_stays_finished() {
-    let robot = Scara::new(100.0, 60.0).unwrap();
-    let path = line((0.0, 0.0), (160.0, 0.0));
-
-    for configuration in configurations() {
-        let mut trajectory = JointTrajectory::new(&robot, &path, 20.0, configuration).unwrap();
-        assert_next_error(
-            trajectory.next(),
-            PlannerError::Kinematics(KinematicsError::UnreachablePoint),
-        );
-        assert!(trajectory.next().is_none());
-        assert!(trajectory.next().is_none());
-    }
-}
-
-#[test]
-fn iterator_stops_at_the_first_unreachable_interior_sample() {
-    let robot = Scara::new(100.0, 60.0).unwrap();
-    let path = line((-160.0, 0.0), (160.0, 0.0));
-
-    for configuration in configurations() {
-        let mut trajectory = JointTrajectory::new(&robot, &path, 20.0, configuration).unwrap();
-
-        for expected_x in [-160.0, -140.0, -120.0, -100.0, -80.0, -60.0, -40.0] {
-            let angles = unwrap_angles(trajectory.next());
-            assert_point_close(forward(&robot, angles), point(expected_x, 0.0), 160.0);
-        }
-
-        assert_next_error(
-            trajectory.next(),
-            PlannerError::Kinematics(KinematicsError::UnreachablePoint),
-        );
-        assert!(trajectory.next().is_none());
-        assert!(trajectory.next().is_none());
-    }
 }
 
 #[test]
@@ -664,20 +632,22 @@ fn validate_and_into_validated_preserve_max_joint_step_violations() {
 }
 
 #[test]
-fn kinematics_errors_take_precedence_over_max_joint_step_validation() {
-    let robot = Scara::new(100.0, 60.0).unwrap();
-    let path = line((0.0, 0.0), (160.0, 0.0));
-
-    for configuration in configurations() {
-        let mut trajectory = JointTrajectory::new(&robot, &path, 20.0, configuration)
-            .unwrap()
-            .with_max_joint_step(MIN_POSITIVE_STEP)
-            .unwrap();
-        assert_next_error(
-            trajectory.next(),
-            PlannerError::Kinematics(KinematicsError::UnreachablePoint),
-        );
-        assert!(trajectory.next().is_none());
+fn numerical_kinematics_errors_take_precedence_over_max_joint_step_validation() {
+    let path = line((f64::MAX, 0.0), (f64::MAX, 0.0));
+    for (l1, l2) in [(f64::MAX, MIN_POSITIVE_STEP), (MIN_POSITIVE_STEP, f64::MAX)] {
+        let robot = Scara::new(l1, l2).unwrap();
+        for configuration in configurations() {
+            let mut trajectory = JointTrajectory::new(&robot, &path, f64::MAX, configuration)
+                .unwrap()
+                .with_max_joint_step(MIN_POSITIVE_STEP)
+                .unwrap();
+            assert_next_error(
+                trajectory.next(),
+                PlannerError::Kinematics(KinematicsError::NumericalFailure),
+            );
+            assert!(trajectory.next().is_none());
+            assert!(trajectory.next().is_none());
+        }
     }
 }
 
@@ -862,23 +832,23 @@ fn with_limits_validates_unwrapped_angles_across_the_pi_branch_cut() {
 }
 
 #[test]
-fn with_limits_preserves_kinematics_error_precedence_and_finishes_the_iterator() {
-    let robot = Scara::new(100.0, 60.0).unwrap();
-    let path = line((0.0, 0.0), (160.0, 0.0));
+fn with_limits_preserves_numerical_kinematics_error_precedence_and_finishes_the_iterator() {
+    let path = line((f64::MAX, 0.0), (f64::MAX, 0.0));
     let restrictive_limits = limits(0.0, 0.0, 0.0, 0.0);
-
-    for configuration in configurations() {
-        let mut trajectory = JointTrajectory::new(&robot, &path, 20.0, configuration)
-            .unwrap()
-            .with_limits(&restrictive_limits)
-            .unwrap();
-
-        assert_next_error(
-            trajectory.next(),
-            PlannerError::Kinematics(KinematicsError::UnreachablePoint),
-        );
-        assert!(trajectory.next().is_none());
-        assert!(trajectory.next().is_none());
+    for (l1, l2) in [(f64::MAX, MIN_POSITIVE_STEP), (MIN_POSITIVE_STEP, f64::MAX)] {
+        let robot = Scara::new(l1, l2).unwrap();
+        for configuration in configurations() {
+            let mut trajectory = JointTrajectory::new(&robot, &path, f64::MAX, configuration)
+                .unwrap()
+                .with_limits(&restrictive_limits)
+                .unwrap();
+            assert_next_error(
+                trajectory.next(),
+                PlannerError::Kinematics(KinematicsError::NumericalFailure),
+            );
+            assert!(trajectory.next().is_none());
+            assert!(trajectory.next().is_none());
+        }
     }
 }
 
@@ -1241,9 +1211,8 @@ fn validate_accepts_reachable_trajectories_for_both_configurations_and_scales() 
 }
 
 #[test]
-fn validate_rejects_unreachable_endpoints_and_degenerate_segments() {
+fn new_rejects_unreachable_endpoints_and_degenerate_segments() {
     let robot = Scara::new(100.0, 60.0).unwrap();
-
     for path in [
         line((0.0, 0.0), (160.0, 0.0)),
         line((160.0, 0.0), (0.0, 0.0)),
@@ -1254,148 +1223,90 @@ fn validate_rejects_unreachable_endpoints_and_degenerate_segments() {
     ] {
         for configuration in configurations() {
             assert_eq!(
-                JointTrajectory::new(&robot, &path, 20.0, configuration)
-                    .unwrap()
-                    .validate(),
-                Err(PlannerError::SegmentDontReachable)
+                JointTrajectory::new(&robot, &path, 20.0, configuration).unwrap_err(),
+                PlannerError::SegmentUnreachable
             );
         }
     }
 }
 
 #[test]
-fn validate_rejects_an_unreachable_interior_before_iterating_a_valid_prefix() {
-    let robot = Scara::new(100.0, 60.0).unwrap();
-    let path = line((-160.0, 0.0), (160.0, 0.0));
-
-    for configuration in configurations() {
-        assert_eq!(
-            JointTrajectory::new(&robot, &path, 20.0, configuration)
-                .unwrap()
-                .validate(),
-            Err(PlannerError::SegmentDontReachable)
-        );
-    }
-}
-
-#[test]
-fn validation_rejects_a_hole_between_reachable_samples_at_extreme_scales() {
+fn new_rejects_a_hole_between_reachable_samples_regardless_of_resolution_and_scale() {
     for scale in [1e-300, 1.0, 1e300] {
         let robot = Scara::new(3.0 * scale, scale).unwrap();
         for path in [
             line((0.0, -3.0 * scale), (0.0, 3.0 * scale)),
             line((0.0, 3.0 * scale), (0.0, -3.0 * scale)),
         ] {
+            let samples: Vec<_> = path.points(f64::MAX).unwrap().map(Result::unwrap).collect();
+            assert_eq!(samples.len(), 2);
             for configuration in configurations() {
-                let trajectory =
-                    JointTrajectory::new(&robot, &path, f64::MAX, configuration).unwrap();
-                let samples: Vec<_> = trajectory.clone().collect();
-                assert_eq!(samples.len(), 2);
-                assert!(samples.iter().all(Result::is_ok));
+                assert!(
+                    samples
+                        .iter()
+                        .all(|point| robot.inverse(*point, configuration).is_ok())
+                );
                 assert!(matches!(
                     robot.inverse(path.point_at(0.5).unwrap(), configuration),
                     Err(KinematicsError::UnreachablePoint)
                 ));
-
-                // Every sampled point is reachable, so iterating the samples
-                // alone cannot establish reachability of the whole segment.
-                assert_validation_error(&trajectory, PlannerError::SegmentDontReachable);
+                // The coarsest sampling omits the hole entirely. Construction
+                // must still reject the full segment before yielding an iterator.
+                for spacing in [f64::MAX, 6.0 * scale, 3.0 * scale, scale] {
+                    assert_eq!(
+                        JointTrajectory::new(&robot, &path, spacing, configuration).unwrap_err(),
+                        PlannerError::SegmentUnreachable,
+                        "scale {scale}, spacing {spacing}, configuration {configuration:?}"
+                    );
+                }
             }
         }
     }
 }
 
 #[test]
-fn segment_reachability_takes_precedence_over_a_first_sample_joint_limit_error() {
-    let robot = Scara::new(100.0, 60.0).unwrap();
-    let path = line((160.0, 0.0), (-160.0, 0.0));
-    let restrictive_limits = limits(0.25, 0.25, 0.25, 0.25);
-
-    for configuration in configurations() {
-        let trajectory = JointTrajectory::new(&robot, &path, f64::MAX, configuration)
-            .unwrap()
-            .with_limits(&restrictive_limits)
-            .unwrap();
-        assert_next_error(trajectory.clone().next(), PlannerError::AngleOutOfLimits);
-        assert_validation_error(&trajectory, PlannerError::SegmentDontReachable);
-    }
-}
-
-#[test]
-fn segment_reachability_takes_precedence_over_a_first_sample_inverse_error() {
+fn new_rejects_an_unreachable_segment_before_attempting_inverse_kinematics() {
     let path = line((f64::MAX, 0.0), (f64::MAX / 2.0, 0.0));
-
     for (l1, l2) in [(f64::MAX, MIN_POSITIVE_STEP), (MIN_POSITIVE_STEP, f64::MAX)] {
         let robot = Scara::new(l1, l2).unwrap();
         for configuration in configurations() {
-            let trajectory = JointTrajectory::new(&robot, &path, f64::MAX, configuration).unwrap();
-            // Inverse kinematics at the reachable start loses the shorter arm
-            // during normalization. The end is outside the reachable annulus.
-            assert_next_error(
-                trajectory.clone().next(),
-                PlannerError::Kinematics(KinematicsError::NumericalFailure),
+            // Inverse kinematics at the start loses the shorter arm during
+            // normalization. The end is outside the reachable annulus.
+            assert!(matches!(
+                robot.inverse(path.start, configuration),
+                Err(KinematicsError::NumericalFailure)
+            ));
+            assert_eq!(
+                JointTrajectory::new(&robot, &path, f64::MAX, configuration).unwrap_err(),
+                PlannerError::SegmentUnreachable
             );
-            assert_validation_error(&trajectory, PlannerError::SegmentDontReachable);
         }
     }
 }
 
 #[test]
-fn segment_numerical_errors_are_propagated_before_sample_validation() {
+fn new_propagates_segment_numerical_errors_even_when_each_endpoint_is_reachable() {
     let robot = Scara::new(f64::MAX / 2.0, f64::MAX / 4.0).unwrap();
-    let restrictive_limits = limits(0.0, 0.0, 0.0, 0.0);
     for path in [
         line((f64::MAX / 2.0, 0.0), (f64::MAX / 2.0, MIN_POSITIVE_STEP)),
         line((f64::MAX / 2.0, MIN_POSITIVE_STEP), (f64::MAX / 2.0, 0.0)),
     ] {
         assert_ne!(path.start, path.end);
         for configuration in configurations() {
-            let trajectory = JointTrajectory::new(&robot, &path, f64::MAX, configuration).unwrap();
-            let samples: Vec<_> = trajectory.clone().collect();
-            assert_eq!(samples.len(), 2);
-            assert!(samples.iter().all(Result::is_ok));
-
-            // The segment normalization erases the difference between its
-            // endpoints. This error must propagate even if all samples pass.
-            let expected = PlannerError::Kinematics(KinematicsError::NumericalFailure);
-            assert_validation_error(&trajectory, expected);
-
-            let with_limits = trajectory.with_limits(&restrictive_limits).unwrap();
-            assert_next_error(with_limits.clone().next(), PlannerError::AngleOutOfLimits);
-            assert_validation_error(&with_limits, expected);
-        }
-    }
-}
-
-#[test]
-fn already_started_takes_precedence_over_segment_reachability_errors() {
-    let robot = Scara::new(100.0, 60.0).unwrap();
-    for path in [
-        line((160.0, 0.0), (-160.0, 0.0)),
-        line((0.0, 0.0), (160.0, 0.0)),
-    ] {
-        for configuration in configurations() {
-            let mut trajectory =
-                JointTrajectory::new(&robot, &path, f64::MAX, configuration).unwrap();
+            assert!(robot.inverse(path.start, configuration).is_ok());
+            assert!(robot.inverse(path.end, configuration).is_ok());
+            // Segment normalization erases the difference between endpoints;
+            // the constructor propagates this error rather than accepting them.
             assert_eq!(
-                trajectory.clone().validate(),
-                Err(PlannerError::SegmentDontReachable)
+                JointTrajectory::new(&robot, &path, f64::MAX, configuration).unwrap_err(),
+                PlannerError::Kinematics(KinematicsError::NumericalFailure)
             );
-            assert!(trajectory.next().is_some());
-            assert_validation_error(&trajectory, PlannerError::TrajectoryAlreadyStarted);
+            // Sampling validation runs before segment normalization.
+            assert_eq!(
+                JointTrajectory::new(&robot, &path, 0.0, configuration).unwrap_err(),
+                PlannerError::Trajectory(TrajectoryError::InvalidMaxPointDistance)
+            );
         }
-    }
-
-    let robot = Scara::new(f64::MAX / 2.0, f64::MAX / 4.0).unwrap();
-    let path = line((f64::MAX / 2.0, 0.0), (f64::MAX / 2.0, MIN_POSITIVE_STEP));
-    for configuration in configurations() {
-        let mut trajectory = JointTrajectory::new(&robot, &path, f64::MAX, configuration).unwrap();
-        assert_eq!(
-            trajectory.clone().validate(),
-            Err(PlannerError::Kinematics(KinematicsError::NumericalFailure))
-        );
-        assert!(trajectory.next().unwrap().is_ok());
-        assert_validation_error(&trajectory, PlannerError::TrajectoryAlreadyStarted);
     }
 }
 
@@ -1448,19 +1359,16 @@ fn validate_rejects_a_trajectory_after_a_successful_next_call() {
 #[test]
 fn validate_rejects_a_trajectory_after_an_error_was_observed() {
     let robot = Scara::new(100.0, 60.0).unwrap();
-    let path = line((0.0, 0.0), (160.0, 0.0));
-
+    let path = line((160.0, 0.0), (140.0, 0.0));
+    let restrictive_limits = limits(0.0, 0.0, 0.0, 0.0);
     for configuration in configurations() {
-        let mut trajectory = JointTrajectory::new(&robot, &path, 20.0, configuration).unwrap();
-        assert_next_error(
-            trajectory.next(),
-            PlannerError::Kinematics(KinematicsError::UnreachablePoint),
-        );
-
-        assert_eq!(
-            trajectory.validate(),
-            Err(PlannerError::TrajectoryAlreadyStarted)
-        );
+        let mut trajectory = JointTrajectory::new(&robot, &path, 20.0, configuration)
+            .unwrap()
+            .with_limits(&restrictive_limits)
+            .unwrap();
+        assert!(trajectory.next().unwrap().is_ok());
+        assert_next_error(trajectory.next(), PlannerError::AngleOutOfLimits);
+        assert_validation_error(&trajectory, PlannerError::TrajectoryAlreadyStarted);
     }
 }
 
@@ -1624,27 +1532,6 @@ fn into_validated_preserves_initial_position_unwrapping_and_limits() {
 }
 
 #[test]
-fn into_validated_preserves_segment_reachability_errors() {
-    let robot = Scara::new(100.0, 60.0).unwrap();
-
-    for path in [
-        line((0.0, 0.0), (160.0, 0.0)),
-        line((160.0, 0.0), (200.0, 0.0)),
-        line((-160.0, 0.0), (160.0, 0.0)),
-    ] {
-        for configuration in configurations() {
-            assert_eq!(
-                JointTrajectory::new(&robot, &path, 20.0, configuration)
-                    .unwrap()
-                    .into_validated()
-                    .unwrap_err(),
-                PlannerError::SegmentDontReachable
-            );
-        }
-    }
-}
-
-#[test]
 fn into_validated_preserves_numerical_and_limit_errors() {
     let smallest_length = f64::from_bits(1);
     let largest_length = f64::MAX;
@@ -1705,13 +1592,12 @@ fn into_validated_rejects_any_trajectory_that_has_already_started() {
             PlannerError::TrajectoryAlreadyStarted
         );
 
-        let unreachable_path = line((0.0, 0.0), (160.0, 0.0));
-        let mut failed =
-            JointTrajectory::new(&robot, &unreachable_path, 20.0, configuration).unwrap();
-        assert_next_error(
-            failed.next(),
-            PlannerError::Kinematics(KinematicsError::UnreachablePoint),
-        );
+        let mut failed = JointTrajectory::new(&robot, &path, 20.0, configuration)
+            .unwrap()
+            .with_max_joint_step(MIN_POSITIVE_STEP)
+            .unwrap();
+        assert!(failed.next().unwrap().is_ok());
+        assert_next_error(failed.next(), PlannerError::MaxJointStepExceeded);
         assert_eq!(
             failed.into_validated().unwrap_err(),
             PlannerError::TrajectoryAlreadyStarted
@@ -1857,7 +1743,6 @@ fn refinement_accepts_degenerate_paths_and_subnormal_spacing() {
 fn refinement_rejects_started_exhausted_and_failed_trajectories_before_checking_budget() {
     let robot = Scara::new(100.0, 60.0).unwrap();
     let path = line((160.0, 0.0), (140.0, 0.0));
-    let unreachable = line((0.0, 0.0), (160.0, 0.0));
 
     for configuration in configurations() {
         let mut partial = JointTrajectory::new(&robot, &path, 5.0, configuration).unwrap();
@@ -1865,11 +1750,12 @@ fn refinement_rejects_started_exhausted_and_failed_trajectories_before_checking_
         let mut exhausted = JointTrajectory::new(&robot, &path, 5.0, configuration).unwrap();
         assert!(exhausted.by_ref().all(|item| item.is_ok()));
         assert!(exhausted.next().is_none());
-        let mut failed = JointTrajectory::new(&robot, &unreachable, 5.0, configuration).unwrap();
-        assert_next_error(
-            failed.next(),
-            PlannerError::Kinematics(KinematicsError::UnreachablePoint),
-        );
+        let mut failed = JointTrajectory::new(&robot, &path, 5.0, configuration)
+            .unwrap()
+            .with_max_joint_step(MIN_POSITIVE_STEP)
+            .unwrap();
+        assert!(failed.next().unwrap().is_ok());
+        assert_next_error(failed.next(), PlannerError::MaxJointStepExceeded);
         let mut failed_and_exhausted = failed.clone();
         assert!(failed_and_exhausted.next().is_none());
 
@@ -1888,49 +1774,16 @@ fn refinement_rejects_started_exhausted_and_failed_trajectories_before_checking_
 }
 
 #[test]
-fn refinement_preserves_segment_and_joint_limit_errors_without_retrying() {
+fn refinement_preserves_joint_limit_errors_without_retrying() {
     let robot = Scara::new(100.0, 60.0).unwrap();
-    let unreachable_start = line((0.0, 0.0), (160.0, 0.0));
-    let unreachable_interior = line((-160.0, 0.0), (160.0, 0.0));
-    let unreachable_end = line((160.0, 0.0), (200.0, 0.0));
-    let reachable = line((160.0, 0.0), (140.0, 0.0));
+    let path = line((160.0, 0.0), (140.0, 0.0));
     let restrictive_limits = limits(0.0, 0.0, 0.0, 0.0);
-
     for configuration in configurations() {
-        for path in [&unreachable_start, &unreachable_interior, &unreachable_end] {
-            let trajectory = JointTrajectory::new(&robot, path, 20.0, configuration).unwrap();
-            assert_eq!(
-                trajectory.clone().validate(),
-                Err(PlannerError::SegmentDontReachable)
-            );
-            for budget in [0, 1, 4, usize::MAX] {
-                assert_eq!(
-                    trajectory
-                        .clone()
-                        .into_validated_with_refinement(budget)
-                        .unwrap_err(),
-                    PlannerError::SegmentDontReachable
-                );
-            }
-        }
-
-        let trajectory = JointTrajectory::new(&robot, &reachable, 20.0, configuration)
+        let trajectory = JointTrajectory::new(&robot, &path, 20.0, configuration)
             .unwrap()
             .with_limits(&restrictive_limits)
             .unwrap();
-        assert_eq!(
-            trajectory.clone().validate(),
-            Err(PlannerError::AngleOutOfLimits)
-        );
-        for budget in [0, 1, 4, usize::MAX] {
-            assert_eq!(
-                trajectory
-                    .clone()
-                    .into_validated_with_refinement(budget)
-                    .unwrap_err(),
-                PlannerError::AngleOutOfLimits
-            );
-        }
+        assert_validation_error(&trajectory, PlannerError::AngleOutOfLimits);
     }
 }
 
@@ -2186,34 +2039,6 @@ fn refinement_propagates_too_many_segments_when_resampling() {
             trajectory.into_validated_with_refinement(1).unwrap_err(),
             PlannerError::Trajectory(TrajectoryError::TooManySegments)
         );
-    }
-}
-
-#[test]
-fn refinement_rejects_unreachable_segments_before_step_checks_or_resampling() {
-    let robot = Scara::new(100.0, 60.0).unwrap();
-    let path = line((-160.0, 0.0), (160.0, 0.0));
-
-    for configuration in configurations() {
-        for (spacing, sample_error) in [
-            (320.0, PlannerError::MaxJointStepExceeded),
-            (
-                160.0,
-                PlannerError::Kinematics(KinematicsError::UnreachablePoint),
-            ),
-            (20.0, PlannerError::MaxJointStepExceeded),
-        ] {
-            let trajectory = JointTrajectory::new(&robot, &path, spacing, configuration)
-                .unwrap()
-                .with_max_joint_step(1.0)
-                .unwrap();
-            // The raw iterator reports either an excessive step or an
-            // unreachable sample, depending on the sampling resolution.
-            let mut samples = trajectory.clone();
-            assert!(samples.next().unwrap().is_ok());
-            assert_next_error(samples.next(), sample_error);
-            assert_validation_error(&trajectory, PlannerError::SegmentDontReachable);
-        }
     }
 }
 

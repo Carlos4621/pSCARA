@@ -396,3 +396,28 @@ fn regression_accumulated_time_overflow_is_reported_once_and_finishes_iteration(
         assert_error_then_finished(&mut timed, PlannerError::TimeElapsedOverflow);
     }
 }
+
+#[test]
+fn a_positive_step_lost_in_a_large_accumulated_time_returns_precision_lost() {
+    let robot = Scara::new(6.0, 4.0).unwrap();
+    let path = line((3.0, 0.0), (5.0, 0.0));
+    for configuration in configurations() {
+        let angles: Vec<_> = validated(&robot, &path, 1.0, configuration)
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(angles.len(), 3);
+        let limits = velocities(1e-300, 1.0);
+        let first_delta = limits.min_duration_between(angles[0], angles[1]).unwrap();
+        let last_delta = limits.min_duration_between(angles[1], angles[2]).unwrap();
+        assert!(first_delta.is_finite() && first_delta > 0.0);
+        assert!(last_delta.is_finite() && last_delta > 0.0);
+        assert_eq!(first_delta + last_delta, first_delta);
+        let mut timed = TimedJointTrajectory::new(
+            validated(&robot, &path, 1.0, configuration),
+            velocities(1e-300, 1.0),
+        );
+        assert_eq!(sample(timed.next()).time_elapsed, 0.0);
+        assert_eq!(sample(timed.next()).time_elapsed, first_delta);
+        assert_error_then_finished(&mut timed, PlannerError::TimeElapsedPrecisionLost);
+    }
+}

@@ -18,4 +18,5 @@ pub enum PlannerError {
     InvalidJointVelocity,
     NumericalFailure,
     TimeElapsedOverflow,
+    TimeElapsedPrecisionLost,
 }

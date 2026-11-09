@@ -2,6 +2,7 @@ use kinematics::JointAngles;
 
 use crate::{JointVelocityLimits, PlannerError, ValidatedTrajectory};
 
+#[derive(Debug, Clone, Copy)]
 pub struct TimedJointSample {
     pub angle: JointAngles,
     pub time_elapsed: f64,
@@ -36,37 +37,41 @@ impl Iterator for TimedJointTrajectory<'_> {
             return None;
         }
 
-        let next_angle = match self.trajectory.next()? {
-            Ok(ok) => ok,
-            Err(err) => return Some(Err(err)),
+        let Some(next_angle) = self.trajectory.next() else {
+            self.is_finished = true;
+            return None;
         };
 
-        let previous_angle = self.previous_angle.unwrap_or(next_angle);
+        let result = next_angle.and_then(|angle| {
+            let delta_time = match self.previous_angle {
+                Some(previous) => self.velocity_limits.min_duration_between(previous, angle)?,
+                None => 0.0,
+            };
 
-        let time_to_reach = self
-            .velocity_limits
-            .min_duration_between(previous_angle, next_angle);
+            let new_time = self.time_elapsed + delta_time;
 
-        match time_to_reach {
-            Ok(ok) => {
-                self.previous_angle = Some(next_angle);
-                self.time_elapsed += ok;
-
-                if !self.time_elapsed.is_finite() {
-                    self.is_finished = true;
-                    return Some(Err(PlannerError::TimeElapsedOverflow));
-                }
-
-                Some(Ok(TimedJointSample {
-                    angle: next_angle,
-                    time_elapsed: self.time_elapsed,
-                }))
+            if !new_time.is_finite() {
+                return Err(PlannerError::TimeElapsedOverflow);
             }
-            Err(err) => {
-                self.is_finished = true;
-                Some(Err(err))
+
+            if delta_time > 0.0 && new_time <= self.time_elapsed {
+                return Err(PlannerError::TimeElapsedPrecisionLost);
             }
+
+            self.previous_angle = Some(angle);
+            self.time_elapsed = new_time;
+
+            Ok(TimedJointSample {
+                angle,
+                time_elapsed: new_time,
+            })
+        });
+
+        if result.is_err() {
+            self.is_finished = true;
         }
+
+        Some(result)
     }
 }
 

@@ -1,6 +1,8 @@
+use core::ops::{Add, Mul, Sub};
+
 use crate::KinematicsError;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Point {
     x: f64,
     y: f64,
@@ -49,5 +51,39 @@ impl Point {
 
     pub fn y(&self) -> f64 {
         self.y
+    }
+
+    pub fn scale(self, scale: f64) -> Result<Self, KinematicsError> {
+        Self::new(self.x * scale, self.y * scale)
+    }
+}
+
+impl Add for Point {
+    type Output = Result<Self, KinematicsError>;
+
+    fn add(self, rhs: Self) -> Self::Output {
+        Self::new(self.x + rhs.x, self.y + rhs.y)
+    }
+}
+
+impl Sub for Point {
+    type Output = Result<Self, KinematicsError>;
+
+    fn sub(self, rhs: Self) -> Self::Output {
+        Self::new(self.x - rhs.x, self.y - rhs.y)
+    }
+}
+
+impl Mul for Point {
+    type Output = Result<f64, KinematicsError>;
+
+    fn mul(self, rhs: Self) -> Self::Output {
+        let result = self.x * rhs.x + self.y * rhs.y;
+
+        if !result.is_finite() {
+            return Err(KinematicsError::NumericalFailure);
+        }
+
+        Ok(result)
     }
 }

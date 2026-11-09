@@ -3,12 +3,12 @@ use kinematics::JointAngles;
 use crate::PlannerError;
 
 #[derive(Debug)]
-pub struct JointVelocity {
+pub struct JointVelocityLimits {
     first_joint_max_velocity: f64,
     second_joint_max_velocity: f64,
 }
 
-impl JointVelocity {
+impl JointVelocityLimits {
     pub fn new(
         first_joint_max_velocity: f64,
         second_joint_max_velocity: f64,
@@ -51,7 +51,6 @@ impl JointVelocity {
             return Err(PlannerError::NumericalFailure);
         }
 
-        Ok((first_delta / self.first_joint_max_velocity)
-            .max(second_delta / self.second_joint_max_velocity))
+        Ok(max_time)
     }
 }

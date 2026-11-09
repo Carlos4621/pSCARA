@@ -1,7 +1,7 @@
 use core::f64::consts::{FRAC_PI_2, PI, TAU};
 
 use kinematics::{ElbowConfiguration, JointAngles, Point, Scara};
-use planner::{JointTrajectory, JointVelocity, PlannerError};
+use planner::{JointTrajectory, JointVelocityLimits, PlannerError};
 use trajectory::LineSegment;
 
 const SMALLEST: f64 = f64::from_bits(1);
@@ -10,12 +10,12 @@ fn angles(first: f64, second: f64) -> JointAngles {
     JointAngles::new(first, second).expect("test angles must be finite")
 }
 
-fn velocity(first: f64, second: f64) -> JointVelocity {
-    JointVelocity::new(first, second).expect("test velocities must be valid")
+fn velocity(first: f64, second: f64) -> JointVelocityLimits {
+    JointVelocityLimits::new(first, second).expect("test velocities must be valid")
 }
 
 fn assert_duration_in_both_directions(
-    velocity: &JointVelocity,
+    velocity: &JointVelocityLimits,
     start: JointAngles,
     end: JointAngles,
     expected: f64,
@@ -30,7 +30,7 @@ fn assert_duration_in_both_directions(
 }
 
 fn assert_numerical_failure_in_both_directions(
-    velocity: &JointVelocity,
+    velocity: &JointVelocityLimits,
     start: JointAngles,
     end: JointAngles,
 ) {
@@ -49,7 +49,7 @@ fn new_accepts_every_combination_of_strictly_positive_finite_boundary_values() {
     for first in valid {
         for second in valid {
             assert!(
-                JointVelocity::new(first, second).is_ok(),
+                JointVelocityLimits::new(first, second).is_ok(),
                 "velocities ({first}, {second}) should be accepted"
             );
         }
@@ -74,14 +74,14 @@ fn new_rejects_zero_negative_or_nonfinite_velocities_in_either_joint() {
         for valid in [SMALLEST, f64::MIN_POSITIVE, 1.0, f64::MAX] {
             for (first, second) in [(bad, valid), (valid, bad)] {
                 assert_eq!(
-                    JointVelocity::new(first, second).unwrap_err(),
+                    JointVelocityLimits::new(first, second).unwrap_err(),
                     PlannerError::InvalidJointVelocity
                 );
             }
         }
         for other_bad in invalid {
             assert_eq!(
-                JointVelocity::new(bad, other_bad).unwrap_err(),
+                JointVelocityLimits::new(bad, other_bad).unwrap_err(),
                 PlannerError::InvalidJointVelocity
             );
         }

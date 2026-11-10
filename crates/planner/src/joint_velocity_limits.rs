@@ -53,4 +53,12 @@ impl JointVelocityLimits {
 
         Ok(max_time)
     }
+
+    pub fn first_joint_max_velocity(&self) -> f64 {
+        self.first_joint_max_velocity
+    }
+
+    pub fn second_joint_max_velocity(&self) -> f64 {
+        self.second_joint_max_velocity
+    }
 }

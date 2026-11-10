@@ -23,3 +23,6 @@ pub use timed_joint_trajectory::{TimedJointSample, TimedJointTrajectory};
 
 mod validated_timed_trajectory;
 pub use validated_timed_trajectory::ValidatedTimedTrajectory;
+
+mod joint_acceleration_limits;
+pub use joint_acceleration_limits::JointAccelerationLimits;

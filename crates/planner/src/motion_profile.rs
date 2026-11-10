@@ -1,5 +1,11 @@
 use crate::PlannerError;
 
+enum MotionPhase {
+    Acceletration,
+    Cruise,
+    Desacceleration,
+}
+
 #[derive(Debug)]
 pub struct MotionProfile {
     start_angle: f64,
@@ -89,36 +95,71 @@ impl MotionProfile {
     }
 
     pub fn position_at(&self, time: f64) -> Result<f64, PlannerError> {
-        if !time.is_finite() || time < 0.0 || time > self.total_time {
-            return Err(PlannerError::InvalidTime);
-        }
+        self.validate_time(time)?;
 
         if time == self.total_time {
             return Ok(self.end_angle);
         }
 
-        let angle = if 0.0 <= time && time <= self.acceleration_time {
-            self.calcule_acceleration_phase(time)
-        } else if self.acceleration_time < time && time <= self.acceleration_time + self.cruise_time
-        {
-            self.calcule_cruise_phase(time)
-        } else {
-            self.calcule_desacceleration_phase(time)
+        let angle = match self.get_phase_on(time) {
+            MotionPhase::Acceletration => self.position_on_acceleration_phase(time),
+            MotionPhase::Cruise => self.position_on_cruise_phase(time),
+            MotionPhase::Desacceleration => self.position_on_desacceleration_phase(time),
         };
-        
+
         Ok(self.start_angle + self.displacement_direction * angle)
     }
 
-    fn calcule_acceleration_phase(&self, time: f64) -> f64 {
+    pub fn velocity_at(&self, time: f64) -> Result<f64, PlannerError> {
+        self.validate_time(time)?;
+
+        let velocity_magnitude = match self.get_phase_on(time) {
+            MotionPhase::Acceletration => self.velocity_on_acceleration_phase(time),
+            MotionPhase::Cruise => self.peak_velocity,
+            MotionPhase::Desacceleration => self.velocity_on_desacceleration_phase(time),
+        };
+
+        Ok(velocity_magnitude * self.displacement_direction)
+    }
+
+    pub fn validate_time(&self, time: f64) -> Result<(), PlannerError> {
+        if !time.is_finite() || time < 0.0 || time > self.total_time {
+            return Err(PlannerError::InvalidTime);
+        }
+
+        Ok(())
+    }
+
+    fn get_phase_on(&self, time: f64) -> MotionPhase {
+        if 0.0 <= time && time <= self.acceleration_time {
+            return MotionPhase::Acceletration;
+        }
+
+        if self.acceleration_time < time && time <= self.acceleration_time + self.cruise_time {
+            return MotionPhase::Cruise;
+        }
+
+        MotionPhase::Desacceleration
+    }
+
+    fn position_on_acceleration_phase(&self, time: f64) -> f64 {
         self.max_acceleration * time * time / 2.0
     }
 
-    fn calcule_cruise_phase(&self, time: f64) -> f64 {
-        self.calcule_acceleration_phase(self.acceleration_time)
+    fn position_on_cruise_phase(&self, time: f64) -> f64 {
+        self.position_on_acceleration_phase(self.acceleration_time)
             + self.peak_velocity * (time - self.acceleration_time)
     }
 
-    fn calcule_desacceleration_phase(&self, time: f64) -> f64 {
-        self.angular_displacement - self.calcule_acceleration_phase(self.total_time - time)
+    fn position_on_desacceleration_phase(&self, time: f64) -> f64 {
+        self.angular_displacement - self.position_on_acceleration_phase(self.total_time - time)
+    }
+
+    fn velocity_on_acceleration_phase(&self, time: f64) -> f64 {
+        self.max_acceleration * time
+    }
+
+    fn velocity_on_desacceleration_phase(&self, time: f64) -> f64 {
+        self.velocity_on_acceleration_phase(self.total_time - time)
     }
 }

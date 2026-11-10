@@ -26,3 +26,6 @@ pub use validated_timed_trajectory::ValidatedTimedTrajectory;
 
 mod joint_acceleration_limits;
 pub use joint_acceleration_limits::JointAccelerationLimits;
+
+mod motion_profile;
+pub use motion_profile::MotionProfile;

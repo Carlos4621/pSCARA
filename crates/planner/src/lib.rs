@@ -29,3 +29,6 @@ pub use joint_acceleration_limits::JointAccelerationLimits;
 
 mod motion_profile;
 pub use motion_profile::MotionProfile;
+
+mod joint_motion_profile;
+pub use joint_motion_profile::JointMotionProfile;

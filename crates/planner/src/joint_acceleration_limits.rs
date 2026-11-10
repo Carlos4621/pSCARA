@@ -53,6 +53,14 @@ impl JointAccelerationLimits {
         Ok(max_duration)
     }
 
+    pub fn first_joint_max_acceleration(&self) -> f64 {
+        self.first_joint_max_acceleration
+    }
+
+    pub fn second_joint_max_acceleration(&self) -> f64 {
+        self.second_joint_max_acceleration
+    }
+
     fn duration_between_angles(
         start: f64,
         end: f64,

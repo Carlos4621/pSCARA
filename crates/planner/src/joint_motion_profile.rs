@@ -66,6 +66,30 @@ impl JointMotionProfile {
         JointAngles::new(first_theta, second_theta).map_err(PlannerError::Kinematics)
     }
 
+    pub fn velocity_at(&self, time: f64) -> Result<(f64, f64), PlannerError> {
+        if !time.is_finite() || time < 0.0 || time > self.total_time {
+            return Err(PlannerError::InvalidTime);
+        }
+
+        // Ninguna articulación necesita moverse.
+        if self.total_time == 0.0 {
+            return Ok((0.0, 0.0));
+        }
+
+        let progress = time / self.total_time;
+
+        let first_factor = self.first_profile.total_time() / self.total_time;
+        let second_factor = self.second_profile.total_time() / self.total_time;
+
+        let first_time = progress * self.first_profile.total_time();
+        let second_time = progress * self.second_profile.total_time();
+
+        let first_velocity = self.first_profile.velocity_at(first_time)? * first_factor;
+        let second_velocity = self.second_profile.velocity_at(second_time)? * second_factor;
+
+        Ok((first_velocity, second_velocity))
+    }
+
     pub fn total_time(&self) -> f64 {
         self.total_time
     }

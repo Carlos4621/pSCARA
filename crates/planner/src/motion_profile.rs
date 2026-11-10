@@ -93,6 +93,10 @@ impl MotionProfile {
             return Err(PlannerError::InvalidTime);
         }
 
+        if time == self.total_time {
+            return Ok(self.end_angle);
+        }
+
         let angle = if 0.0 <= time && time <= self.acceleration_time {
             self.calcule_acceleration_phase(time)
         } else if self.acceleration_time < time && time <= self.acceleration_time + self.cruise_time
@@ -101,11 +105,7 @@ impl MotionProfile {
         } else {
             self.calcule_desacceleration_phase(time)
         };
-
-        if time == self.total_time {
-            return Ok(self.end_angle);
-        }
-
+        
         Ok(self.start_angle + self.displacement_direction * angle)
     }
 

@@ -113,6 +113,10 @@ impl MotionProfile {
     pub fn velocity_at(&self, time: f64) -> Result<f64, PlannerError> {
         self.validate_time(time)?;
 
+        if time == self.total_time {
+            return Ok(0.0);
+        }
+
         let velocity_magnitude = match self.get_phase_on(time) {
             MotionPhase::Acceletration => self.velocity_on_acceleration_phase(time),
             MotionPhase::Cruise => self.peak_velocity,

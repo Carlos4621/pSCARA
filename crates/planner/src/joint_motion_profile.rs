@@ -40,7 +40,7 @@ impl JointMotionProfile {
     }
 
     pub fn position_at(&self, time: f64) -> Result<JointAngles, PlannerError> {
-        if time > self.total_time || time < 0.0 {
+        if !time.is_finite() || time > self.total_time || time < 0.0 {
             return Err(PlannerError::InvalidTime);
         }
 
@@ -55,8 +55,10 @@ impl JointMotionProfile {
             .map_err(PlannerError::Kinematics);
         }
 
-        let first_time = time * self.first_profile.total_time() / self.total_time;
-        let second_time = time * self.second_profile.total_time() / self.total_time;
+        let progress = time / self.total_time;
+
+        let first_time = progress * self.first_profile.total_time();
+        let second_time = progress * self.second_profile.total_time();
 
         let first_theta = self.first_profile.position_at(first_time)?;
         let second_theta = self.second_profile.position_at(second_time)?;

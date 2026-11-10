@@ -3,6 +3,7 @@ use crate::PlannerError;
 #[derive(Debug)]
 pub struct MotionProfile {
     start_angle: f64,
+    end_angle: f64,
     angular_displacement: f64,
     displacement_direction: f64,
     peak_velocity: f64,
@@ -35,7 +36,9 @@ impl MotionProfile {
         let angular_displacement = (end_angle - start_angle).abs();
         let displacement_direction = (end_angle - start_angle).signum();
 
-        let peak_velocity = if angular_displacement < critic_distance {
+        let is_triangular = angular_displacement < critic_distance;
+
+        let peak_velocity = if is_triangular {
             libm::sqrt(max_acceleration * angular_displacement)
         } else {
             max_velocity
@@ -51,11 +54,11 @@ impl MotionProfile {
             return Err(PlannerError::NumericalFailure);
         }
 
-        let cruise_time = if angular_displacement > 0.0 {
+        let cruise_time = if angular_displacement == 0.0 || is_triangular {
+            0.0
+        } else {
             (angular_displacement - peak_velocity * peak_velocity / max_acceleration)
                 / peak_velocity
-        } else {
-            0.0
         };
 
         if !cruise_time.is_finite() {
@@ -70,6 +73,7 @@ impl MotionProfile {
 
         Ok(Self {
             start_angle,
+            end_angle,
             angular_displacement,
             displacement_direction,
             peak_velocity,
@@ -89,15 +93,18 @@ impl MotionProfile {
             return Err(PlannerError::InvalidTime);
         }
 
-        let angle = if 0.0 <= time && time <= self.acceleration_time{
+        let angle = if 0.0 <= time && time <= self.acceleration_time {
             self.calcule_acceleration_phase(time)
-        } 
-        else if self.acceleration_time < time && time <= self.acceleration_time + self.cruise_time {
+        } else if self.acceleration_time < time && time <= self.acceleration_time + self.cruise_time
+        {
             self.calcule_cruise_phase(time)
-        }
-        else {
+        } else {
             self.calcule_desacceleration_phase(time)
         };
+
+        if time == self.total_time {
+            return Ok(self.end_angle);
+        }
 
         Ok(self.start_angle + self.displacement_direction * angle)
     }
@@ -107,7 +114,8 @@ impl MotionProfile {
     }
 
     fn calcule_cruise_phase(&self, time: f64) -> f64 {
-        self.calcule_acceleration_phase(self.acceleration_time) + self.peak_velocity * (time - self.acceleration_time)
+        self.calcule_acceleration_phase(self.acceleration_time)
+            + self.peak_velocity * (time - self.acceleration_time)
     }
 
     fn calcule_desacceleration_phase(&self, time: f64) -> f64 {

@@ -1,7 +1,11 @@
-use planner::{MotionProfile, PlannerError};
+use core::f64::consts::TAU;
 
-// All floating-point inputs to active tests stay in [0, 1000]. These
-// wrappers also check calculated query times before passing them to the API.
+use kinematics::JointAngles;
+use planner::{JointAccelerationLimits, JointVelocityLimits, MotionProfile, PlannerError};
+
+// The original cases use [0, 1000]. signed_profile extends ordinary angles
+// to [-1000, 1000]; positive limits and valid query times remain in [0, 1000].
+// Invalid negative limits and times are passed directly in rejection tests.
 fn bounded(value: f64) -> f64 {
     assert!(
         (0.0..=1000.0).contains(&value),
@@ -18,6 +22,12 @@ fn profile(start: f64, end: f64, acceleration: f64, velocity: f64) -> MotionProf
         bounded(velocity),
     )
     .unwrap()
+}
+
+fn signed_profile(start: f64, end: f64, acceleration: f64, velocity: f64) -> MotionProfile {
+    assert!((-1000.0..=1000.0).contains(&start));
+    assert!((-1000.0..=1000.0).contains(&end));
+    MotionProfile::new(start, end, bounded(acceleration), bounded(velocity)).unwrap()
 }
 
 fn position(profile: &MotionProfile, time: f64) -> f64 {
@@ -298,8 +308,13 @@ fn sampled_positions_respect_velocity_and_acceleration_limits_for_ordinary_input
         (43.0, 25.0, 2.0, 3.0),
         (10.25, 13.75, 2.5, 1.75),
         (500.0, 600.0, 7.3, 9.7),
+        (-11.0, -10.0, 4.0, 4.0),
+        (-10.0, -11.0, 4.0, 1.0),
+        (-25.0, 43.0, 2.0, 8.0),
+        (43.0, -25.0, 2.0, 3.0),
+        (-600.0, -500.0, 7.3, 9.7),
     ] {
-        let motion = profile(start, end, a, v);
+        let motion = signed_profile(start, end, a, v);
         let step = motion.total_time() / 128.0;
         let samples: Vec<_> = (0..=128)
             .map(|i| position(&motion, step * f64::from(i)))
@@ -319,6 +334,240 @@ fn sampled_positions_respect_velocity_and_acceleration_limits_for_ordinary_input
                 difference <= a * step * step + 1e-10,
                 "acceleration limit exceeded for {motion:?}"
             );
+        }
+    }
+}
+
+#[test]
+fn triangular_profiles_do_not_gain_a_roundoff_cruise_phase() {
+    // d=a=0.1 gives a one-second ramp and total duration exactly 2.
+    // Reconstructing cruise from peak^2/a previously produced a small
+    // negative cruise and changed the total to 1.9999999999999998.
+    for (start, end) in [(0.0, 0.1), (0.0, -0.1), (-0.1, 0.0), (0.1, 0.0)] {
+        let motion = signed_profile(start, end, 0.1, 1.0);
+        assert_eq!(motion.total_time(), 2.0);
+        assert_close(position(&motion, 1.0), (start + end) / 2.0);
+        assert_eq!(position(&motion, 2.0), end);
+    }
+}
+
+#[test]
+fn final_position_is_exact_despite_cancellation_between_signed_angles() {
+    for (start, end) in [
+        (-1000.0, 0.1),
+        (1000.0, -0.1),
+        (-123.45, 67.89),
+        (123.45, -67.89),
+        (-10.25, -13.75),
+    ] {
+        let motion = signed_profile(start, end, 2.5, 4.0);
+        // Exact endpoint identity is intentional here. A tolerance would
+        // hide the cancellation that storing end_angle now prevents.
+        assert_eq!(position(&motion, motion.total_time()), end);
+    }
+}
+
+#[test]
+fn negative_angles_follow_triangular_and_trapezoidal_profiles_in_both_directions() {
+    for (velocity, duration, samples) in [
+        (
+            4.0,
+            1.0,
+            [
+                (0.0, 0.0),
+                (0.25, 0.125),
+                (0.5, 0.5),
+                (0.75, 0.875),
+                (1.0, 1.0),
+            ],
+        ),
+        (
+            1.0,
+            1.25,
+            [
+                (0.0, 0.0),
+                (0.125, 0.03125),
+                (0.5, 0.375),
+                (1.125, 0.96875),
+                (1.25, 1.0),
+            ],
+        ),
+    ] {
+        let forward = signed_profile(-11.0, -10.0, 4.0, velocity);
+        let reverse = signed_profile(-10.0, -11.0, 4.0, velocity);
+        assert_close(forward.total_time(), duration);
+        assert_close(reverse.total_time(), duration);
+        for (time, distance) in samples {
+            assert_close(position(&forward, time), -11.0 + distance);
+            assert_close(position(&reverse, time), -10.0 - distance);
+        }
+    }
+}
+
+#[test]
+fn crossing_zero_is_continuous_in_both_directions() {
+    let forward = signed_profile(-2.0, 2.0, 4.0, 4.0);
+    let reverse = signed_profile(2.0, -2.0, 4.0, 4.0);
+    for (time, expected) in [(0.0, -2.0), (0.5, -1.5), (1.0, 0.0), (1.5, 1.5), (2.0, 2.0)] {
+        assert_close(position(&forward, time), expected);
+        assert_close(position(&reverse, time), -expected);
+    }
+}
+
+#[test]
+fn negative_stationary_angles_have_zero_duration() {
+    for angle in [-1000.0, -123.75, -0.125] {
+        for (a, v) in [(0.25, 1000.0), (1000.0, 0.25), (1.0, 1.0)] {
+            let motion = signed_profile(angle, angle, a, v);
+            assert_eq!(motion.total_time(), 0.0);
+            assert_eq!(position(&motion, 0.0), angle);
+            assert_eq!(motion.position_at(0.25), Err(PlannerError::InvalidTime));
+        }
+    }
+}
+
+#[test]
+fn signed_zero_endpoints_preserve_the_stored_final_angle() {
+    for start in [-0.0, 0.0, -1.0, 1.0] {
+        for end in [-0.0_f64, 0.0] {
+            let motion = signed_profile(start, end, 4.0, 4.0);
+            assert_eq!(
+                position(&motion, motion.total_time()).to_bits(),
+                end.to_bits()
+            );
+        }
+    }
+}
+
+#[test]
+fn negative_acceleration_is_rejected_for_moving_and_stationary_profiles() {
+    for acceleration in [-1000.0, -7.5, -1.0, -0.125, -0.0] {
+        for (start, end) in [(-10.0, -9.0), (-1.0, 1.0), (-10.0, -10.0)] {
+            assert_eq!(
+                MotionProfile::new(start, end, acceleration, 4.0).unwrap_err(),
+                PlannerError::InvalidMaxAcceleration
+            );
+        }
+    }
+}
+
+#[test]
+fn negative_velocity_is_rejected_for_moving_and_stationary_profiles() {
+    for velocity in [-1000.0, -7.5, -1.0, -0.125, -0.0] {
+        for (start, end) in [(-10.0, -9.0), (-1.0, 1.0), (-10.0, -10.0)] {
+            assert_eq!(
+                MotionProfile::new(start, end, 4.0, velocity).unwrap_err(),
+                PlannerError::InvalidMaxVelocity
+            );
+        }
+    }
+}
+
+#[test]
+fn invalid_acceleration_precedes_invalid_velocity_for_negative_limits() {
+    for a in [-1000.0, -0.125, -0.0] {
+        for v in [-1000.0, -0.125, -0.0] {
+            assert_eq!(
+                MotionProfile::new(-10.0, -9.0, a, v).unwrap_err(),
+                PlannerError::InvalidMaxAcceleration
+            );
+        }
+    }
+}
+
+#[test]
+fn negative_times_are_rejected_without_affecting_later_queries() {
+    for (start, end) in [(-11.0, -10.0), (1.0, -1.0), (-1.0, -1.0)] {
+        let motion = signed_profile(start, end, 4.0, 4.0);
+        for time in [-1000.0, -1.0, -0.125] {
+            assert_eq!(motion.position_at(time), Err(PlannerError::InvalidTime));
+            assert_eq!(position(&motion, 0.0), start);
+            assert_eq!(position(&motion, motion.total_time()), end);
+        }
+        assert_eq!(motion.position_at(-0.0), Ok(start));
+    }
+}
+
+#[test]
+fn reflecting_both_angles_reflects_every_sample_without_changing_duration() {
+    for (start, end, a, v) in [
+        (10.0, 11.0, 4.0, 4.0),
+        (-2.0, 2.0, 4.0, 1.0),
+        (-25.0, -7.0, 2.0, 8.0),
+    ] {
+        let original = signed_profile(start, end, a, v);
+        let reflected = signed_profile(-start, -end, a, v);
+        assert_eq!(original.total_time(), reflected.total_time());
+        for i in 0..=32 {
+            let time = original.total_time() * (f64::from(i) / 32.0);
+            assert_close(position(&reflected, time), -position(&original, time));
+        }
+    }
+}
+
+#[test]
+fn translating_profiles_into_negative_angles_translates_every_sample() {
+    let original = signed_profile(-6.0, 12.0, 2.0, 3.0);
+    for offset in [-500.0, -20.0, 20.0, 500.0] {
+        let translated = signed_profile(-6.0 + offset, 12.0 + offset, 2.0, 3.0);
+        assert_eq!(original.total_time(), translated.total_time());
+        for i in 0..=32 {
+            let time = original.total_time() * (f64::from(i) / 32.0);
+            assert_close(
+                position(&translated, time),
+                position(&original, time) + offset,
+            );
+        }
+    }
+}
+
+#[test]
+fn reversing_a_signed_move_reverses_its_time_sequence() {
+    for (start, end, a, v) in [
+        (-11.0, -10.0, 4.0, 4.0),
+        (-2.0, 2.0, 4.0, 1.0),
+        (-25.0, -7.0, 2.0, 8.0),
+    ] {
+        let forward = signed_profile(start, end, a, v);
+        let reverse = signed_profile(end, start, a, v);
+        let duration = forward.total_time();
+        assert_eq!(duration, reverse.total_time());
+        for i in 0..=32 {
+            let time = duration * (f64::from(i) / 32.0);
+            assert_close(
+                position(&forward, time),
+                position(&reverse, duration - time),
+            );
+        }
+    }
+}
+
+#[test]
+fn signed_multiple_turns_are_not_normalized_to_a_shorter_move() {
+    let motion = signed_profile(-2.0 * TAU, 3.0 * TAU, TAU, TAU);
+    assert_close(motion.total_time(), 6.0);
+    assert_close(position(&motion, 3.0), TAU / 2.0);
+    assert_eq!(position(&motion, 6.0), 3.0 * TAU);
+}
+
+#[test]
+fn signed_profile_durations_agree_with_joint_acceleration_limits() {
+    for start in [-1000.0, -7.5, -0.125, 0.0, 0.125, 7.5, 1000.0] {
+        for end in [-1000.0, -7.5, -0.125, 0.0, 0.125, 7.5, 1000.0] {
+            for a in [0.25, 4.0, 1000.0] {
+                for v in [4.0, 16.0, 1000.0] {
+                    let motion = signed_profile(start, end, a, v);
+                    let expected = JointAccelerationLimits::new(a, 1.0)
+                        .unwrap()
+                        .min_duration_between(
+                            JointAngles::new(start, 0.0).unwrap(),
+                            JointAngles::new(end, 0.0).unwrap(),
+                            &JointVelocityLimits::new(v, 1.0).unwrap(),
+                        )
+                        .unwrap();
+                    assert_close(motion.total_time(), expected);
+                }
+            }
         }
     }
 }
@@ -385,15 +634,23 @@ fn constructed_velocity_profiles_recover_their_integrated_positions() {
 }
 
 // Extreme numerical regressions are deliberately excluded from the mandatory
-// [0, 1000] suite. Each ignore records the operation that loses precision.
+// ordinary signed suite. Each ignore records the precision boundary it covers.
 // Reproduce with: cargo test -p planner --test motion_profile -- --ignored
 
 #[test]
-#[ignore = "precision defect: a*d underflows to zero, yielding zero peak speed and infinite cruise time"]
+#[ignore = "precision defect: a*d underflows to zero, yielding zero peak speed and zero time for nonzero motion"]
 fn regression_underflowed_product_still_has_a_finite_triangular_duration() {
     let scale = 2.0_f64.powi(-600);
     let motion = MotionProfile::new(0.0, scale, scale, 1.0).unwrap();
     assert_close(motion.total_time(), 2.0);
+}
+
+#[test]
+#[ignore = "precision defect: underflowed peak makes total_time zero, so position_at(0) jumps directly to end_angle"]
+fn regression_underflowed_peak_preserves_the_start_at_time_zero() {
+    let scale = 2.0_f64.powi(-600);
+    let motion = MotionProfile::new(0.0, scale, scale, 1.0).unwrap();
+    assert_eq!(motion.position_at(0.0), Ok(0.0));
 }
 
 #[test]
@@ -413,8 +670,16 @@ fn regression_small_common_scale_preserves_a_triangular_duration() {
 }
 
 #[test]
-#[ignore = "precision defect: a huge cruise absorbs both ramp times; the final sample rounds below the stored endpoint"]
+#[ignore = "extreme precision case: a huge cruise absorbs ramp times; stored end_angle now preserves the exact final sample"]
 fn regression_final_position_is_exact_even_when_ramp_times_are_absorbed() {
     let motion = MotionProfile::new(0.0, 1.0, 1.0, 1e-300).unwrap();
     assert_eq!(motion.position_at(motion.total_time()), Ok(1.0));
+}
+
+#[test]
+#[ignore = "precision defect: v*v underflows to zero and stationary motion incorrectly receives two nonzero ramps"]
+fn regression_stationary_negative_angle_takes_zero_time_with_subnormal_limits() {
+    let smallest = f64::from_bits(1);
+    let motion = MotionProfile::new(-1000.0, -1000.0, smallest, smallest).unwrap();
+    assert_eq!(motion.total_time(), 0.0);
 }

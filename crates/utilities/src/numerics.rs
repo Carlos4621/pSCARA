@@ -37,3 +37,13 @@ pub fn validate_non_zero_finite(value: f64) -> Result<(), UtilitiesErrors> {
 
     Ok(())
 }
+
+pub fn validate_non_zero_finite_positive(value: f64) -> Result<(), UtilitiesErrors> {
+    validate_finite_positive(value)?;
+
+    if value == 0.0 {
+        return Err(UtilitiesErrors::NonZeroFinitePositiveF64);
+    }
+
+    Ok(())
+}

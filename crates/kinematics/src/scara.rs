@@ -14,20 +14,40 @@ pub struct Scara {
 
 #[derive(Debug, Clone, Copy)]
 struct NormalizedGeometry {
-    point: Point,
+    // One common scale bounds both arm lengths and all supplied coordinates by 1.
+    scale: f64,
     first_arm_length: f64,
     second_arm_length: f64,
+}
+
+impl NormalizedGeometry {
+    fn normalize_point(&self, point: Point) -> Result<Point, KinematicsError> {
+        Point::new(point.x() / self.scale, point.y() / self.scale)
+    }
+
+    fn reachable_bounds(&self) -> (f64, f64) {
+        // Unlike the original distances, the normalized outer radius is <= 2.
+        let outer = self.first_arm_length + self.second_arm_length;
+        let inner = (self.first_arm_length - self.second_arm_length).abs();
+        let tolerance = Scara::MAX_NUMERICAL_TOLERANCE_FACTOR * f64::EPSILON * outer;
+        (inner - tolerance, outer + tolerance)
+    }
+
+    fn is_reachable(&self, normalized_point: Point) -> bool {
+        let radius = libm::hypot(normalized_point.x(), normalized_point.y());
+        let (inner, outer) = self.reachable_bounds();
+        (inner..=outer).contains(&radius)
+    }
 }
 
 impl Scara {
     const MAX_NUMERICAL_TOLERANCE_FACTOR: f64 = 64.0;
 
     pub fn new(first_arm_length: f64, second_arm_length: f64) -> Result<Self, KinematicsError> {
-        if !Self::is_valid_arm_length(first_arm_length)
-            || !Self::is_valid_arm_length(second_arm_length)
-        {
-            return Err(KinematicsError::ArmWithInvalidLength);
-        }
+        utilities::validate_non_zero_finite_positive(first_arm_length)
+            .map_err(|_| KinematicsError::InvalidArmLength)?;
+        utilities::validate_non_zero_finite_positive(second_arm_length)
+            .map_err(|_| KinematicsError::InvalidArmLength)?;
 
         Ok(Self {
             first_arm_length,
@@ -52,23 +72,22 @@ impl Scara {
         point: Point,
         configuration: ElbowConfiguration,
     ) -> Result<JointAngles, KinematicsError> {
-        if !self.is_reachable_point(point) {
+        let normalized = self.normalize_geometry(&[point]);
+        let normalized_point = normalized.normalize_point(point)?;
+
+        if !normalized.is_reachable(normalized_point) {
             return Err(KinematicsError::UnreachablePoint);
         }
 
-        let normalized =
-            Self::normalize_geometry(point, self.first_arm_length, self.second_arm_length)?;
-
-        let numerator = normalized.point.x() * normalized.point.x()
-            + normalized.point.y() * normalized.point.y()
+        let numerator = normalized_point.x() * normalized_point.x()
+            + normalized_point.y() * normalized_point.y()
             - normalized.first_arm_length * normalized.first_arm_length
             - normalized.second_arm_length * normalized.second_arm_length;
 
         let denominator = 2.0 * normalized.first_arm_length * normalized.second_arm_length;
 
-        if denominator == 0.0 || !denominator.is_finite() {
-            return Err(KinematicsError::NumericalFailure);
-        }
+        utilities::validate_non_zero_finite(denominator)
+            .map_err(|_| KinematicsError::NumericalFailure)?;
 
         let cos_theta2 = (numerator / denominator).clamp(-1.0, 1.0);
 
@@ -93,7 +112,11 @@ impl Scara {
         first_point: Point,
         second_point: Point,
     ) -> Result<bool, KinematicsError> {
-        if !self.is_reachable_point(first_point) || !self.is_reachable_point(second_point) {
+        let normalized = self.normalize_geometry(&[first_point, second_point]);
+        let a = normalized.normalize_point(first_point)?;
+        let b = normalized.normalize_point(second_point)?;
+
+        if !normalized.is_reachable(a) || !normalized.is_reachable(b) {
             return Ok(false);
         }
 
@@ -101,85 +124,39 @@ impl Scara {
             return Ok(true);
         }
 
-        let scale = first_point
-            .x()
-            .abs()
-            .max(first_point.y().abs())
-            .max(self.first_arm_length)
-            .max(self.second_arm_length)
-            .max(second_point.x().abs())
-            .max(second_point.y().abs());
-
-        let a = Point::new(first_point.x() / scale, first_point.y() / scale)?;
-        let b = Point::new(second_point.x() / scale, second_point.y() / scale)?;
-
         let d = (b - a)?;
 
-        let d_lenght = d.distance_from_origin();
+        let d_length = d.distance_from_origin()?;
 
-        if d_lenght == 0.0 {
-            return Err(KinematicsError::NumericalFailure);
-        }
+        utilities::validate_non_zero_finite(d_length)
+            .map_err(|_| KinematicsError::NumericalFailure)?;
 
-        let u = Point::new(d.x() / d_lenght, d.y() / d_lenght)?;
+        let u = Point::new(d.x() / d_length, d.y() / d_length)?;
 
         let h = (-a * u)?;
 
-        let t = (h / d_lenght).clamp(0.0, 1.0);
+        let t = (h / d_length).clamp(0.0, 1.0);
 
         let p = (a + (d.scale(t)?))?;
 
-        let min_r = p.distance_from_origin();
+        let min_r = p.distance_from_origin()?;
 
-        let l1 = self.first_arm_length / scale;
-        let l2 = self.second_arm_length / scale;
-
-        let min_reachable = (l1 - l2).abs();
-        let tolerance = Self::MAX_NUMERICAL_TOLERANCE_FACTOR * f64::EPSILON * (l1 + l2);
-
-        Ok(min_r >= (min_reachable - tolerance))
+        let (inner, _) = normalized.reachable_bounds();
+        Ok(min_r >= inner)
     }
 
-    const fn is_valid_arm_length(length: f64) -> bool {
-        length.is_finite() && length > 0.0
-    }
+    fn normalize_geometry(&self, points: &[Point]) -> NormalizedGeometry {
+        // Include absolute coordinates so every normalized component is <= 1
+        // in magnitude, even for unreachable points in negative quadrants.
+        let scale = points.iter().fold(
+            self.first_arm_length.max(self.second_arm_length),
+            |scale, point| scale.max(point.x().abs()).max(point.y().abs()),
+        );
 
-    fn is_reachable_point(&self, point: Point) -> bool {
-        let distance_from_origin = point.distance_from_origin();
-
-        let boundary_tolerance = self.max_tolerance_distance();
-
-        distance_from_origin.is_finite()
-            && (distance_from_origin <= self.max_reachable_distance() + boundary_tolerance)
-            && (distance_from_origin >= self.min_reachable_distance() - boundary_tolerance)
-    }
-
-    const fn max_reachable_distance(&self) -> f64 {
-        self.first_arm_length + self.second_arm_length
-    }
-
-    const fn min_reachable_distance(&self) -> f64 {
-        (self.first_arm_length - self.second_arm_length).abs()
-    }
-
-    fn max_tolerance_distance(&self) -> f64 {
-        Self::MAX_NUMERICAL_TOLERANCE_FACTOR * f64::EPSILON * self.max_reachable_distance()
-    }
-
-    fn normalize_geometry(
-        point: Point,
-        first_arm_length: f64,
-        second_arm_length: f64,
-    ) -> Result<NormalizedGeometry, KinematicsError> {
-        let normalize_factor = first_arm_length
-            .max(second_arm_length)
-            .max(point.x().abs())
-            .max(point.y().abs());
-
-        Ok(NormalizedGeometry {
-            point: Point::new(point.x() / normalize_factor, point.y() / normalize_factor)?,
-            first_arm_length: first_arm_length / normalize_factor,
-            second_arm_length: second_arm_length / normalize_factor,
-        })
+        NormalizedGeometry {
+            scale,
+            first_arm_length: self.first_arm_length / scale,
+            second_arm_length: self.second_arm_length / scale,
+        }
     }
 }

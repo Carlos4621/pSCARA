@@ -95,6 +95,13 @@ fn zero_length_segment_has_the_reachability_of_its_endpoint() {
 }
 
 #[test]
+fn a_longer_second_arm_keeps_the_same_annular_segment_geometry() {
+    let scara = robot(60.0, 100.0);
+    assert_in_both_directions(&scara, point(40.0, 0.0), point(160.0, 0.0), true);
+    assert_in_both_directions(&scara, point(-160.0, 0.0), point(160.0, 0.0), false);
+}
+
+#[test]
 fn equal_arms_have_no_inner_hole_so_a_diameter_is_reachable() {
     let scara = robot(100.0, 100.0);
 
@@ -355,7 +362,6 @@ fn signed_zero_endpoints_have_identical_reachability() {
 }
 
 #[test]
-#[ignore = "known defect: overflowing arm sum makes endpoint tolerance infinite"]
 fn regression_degenerate_origin_is_outside_the_hole_even_when_arm_sum_overflows() {
     let scara = robot(f64::MAX, f64::MAX / 2.0);
     // The inner radius is MAX/2. An overflowing outer radius must not erase it.
@@ -363,7 +369,6 @@ fn regression_degenerate_origin_is_outside_the_hole_even_when_arm_sum_overflows(
 }
 
 #[test]
-#[ignore = "known defect: endpoint hypot overflow rejects a geometrically reachable point"]
 fn regression_reachable_diagonal_is_not_rejected_when_its_radius_overflows() {
     let scara = robot(f64::MAX, f64::MAX);
     // The whole segment lies in the square [0, MAX]^2, inside radius 2*MAX.
@@ -374,4 +379,17 @@ fn regression_reachable_diagonal_is_not_rejected_when_its_radius_overflows() {
         point(f64::MAX, 0.0),
         true,
     );
+}
+
+#[test]
+fn a_maximum_finite_outer_radius_and_its_tolerance_preserve_segment_geometry() {
+    let arm = f64::MAX / 2.0;
+    let outer = arm + arm;
+    assert!(outer.is_finite());
+    assert!((outer + 64.0 * f64::EPSILON * outer).is_infinite());
+
+    let scara = robot(arm, arm);
+    assert_in_both_directions(&scara, point(outer, 0.0), point(-outer, 0.0), true);
+    assert_in_both_directions(&scara, point(arm, arm), point(-arm, -arm), true);
+    assert_in_both_directions(&scara, point(outer, outer), point(0.0, 0.0), false);
 }

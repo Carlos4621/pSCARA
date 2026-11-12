@@ -10,15 +10,19 @@ pub struct Point {
 
 impl Point {
     pub fn new(x: f64, y: f64) -> Result<Self, KinematicsError> {
-        if !x.is_finite() || !y.is_finite() {
-            return Err(KinematicsError::InvalidPoint);
-        }
+        utilities::validate_finite(x)?;
+        utilities::validate_finite(y)?;
 
         Ok(Self { x, y })
     }
 
-    pub fn distance_from_origin(&self) -> f64 {
-        libm::hypot(self.x, self.y)
+    pub fn distance_from_origin(&self) -> Result<f64, KinematicsError> {
+        let result = libm::hypot(self.x, self.y);
+
+        utilities::validate_finite_positive(result)
+            .map_err(|_| KinematicsError::NumericalFailure)?;
+
+        Ok(result)
     }
 
     pub fn distance_to_point(&self, other: Point) -> Result<f64, KinematicsError> {
@@ -26,9 +30,8 @@ impl Point {
         let dy = self.y - other.y;
         let distance = libm::hypot(dx, dy);
 
-        if !distance.is_finite() {
-            return Err(KinematicsError::NumericalFailure);
-        }
+        utilities::validate_finite_positive(distance)
+            .map_err(|_| KinematicsError::NumericalFailure)?;
 
         Ok(distance)
     }
@@ -38,11 +41,10 @@ impl Point {
         other: Point,
         max_tolerance: f64,
     ) -> Result<bool, KinematicsError> {
-        if !max_tolerance.is_finite() || max_tolerance < 0.0 {
-            return Err(KinematicsError::InvalidTolerance);
-        }
+        utilities::validate_finite_positive(max_tolerance)
+            .map_err(|_| KinematicsError::InvalidTolerance)?;
 
-        Ok(self.distance_to_point(other)?.abs() <= max_tolerance)
+        Ok(self.distance_to_point(other)? <= max_tolerance)
     }
 
     pub fn x(&self) -> f64 {
@@ -54,7 +56,9 @@ impl Point {
     }
 
     pub fn scale(self, scale: f64) -> Result<Self, KinematicsError> {
-        Self::new(self.x * scale, self.y * scale)
+        utilities::validate_finite(scale).map_err(|_| KinematicsError::InvalidScale)?;
+
+        Self::new(self.x * scale, self.y * scale).map_err(|_| KinematicsError::NumericalFailure)
     }
 }
 
@@ -80,9 +84,7 @@ impl Mul for Point {
     fn mul(self, rhs: Self) -> Self::Output {
         let result = self.x * rhs.x + self.y * rhs.y;
 
-        if !result.is_finite() {
-            return Err(KinematicsError::NumericalFailure);
-        }
+        utilities::validate_finite(result)?;
 
         Ok(result)
     }

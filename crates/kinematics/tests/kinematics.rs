@@ -1,4 +1,5 @@
 use kinematics::{ElbowConfiguration, JointAngles, KinematicsError, Point, Scara};
+use utilities::UtilitiesErrors;
 
 #[cfg(test)]
 mod tests {
@@ -41,7 +42,7 @@ mod tests {
             for (x, y) in [(invalid, 0.0), (0.0, invalid), (invalid, invalid)] {
                 assert!(matches!(
                     Point::new(x, y),
-                    Err(KinematicsError::InvalidPoint)
+                    Err(KinematicsError::Utilities(UtilitiesErrors::NonFiniteF64))
                 ));
             }
         }
@@ -68,7 +69,7 @@ mod tests {
             {
                 assert!(matches!(
                     JointAngles::new(first_theta, second_theta),
-                    Err(KinematicsError::InvalidAngle)
+                    Err(KinematicsError::Utilities(UtilitiesErrors::NonFiniteF64))
                 ));
             }
         }
@@ -90,7 +91,7 @@ mod tests {
     }
 
     #[test]
-    fn joint_angles_closeness_includes_each_tolerance_boundary() {
+    fn joint_angles_closeness_includes_each_joint_tolerance_boundary() {
         let origin = angles(0.0, 0.0);
 
         for other in [
@@ -101,6 +102,8 @@ mod tests {
         ] {
             assert_eq!(origin.is_close_to_joint(other, 1.0), Ok(true));
             assert_eq!(other.is_close_to_joint(origin, 1.0), Ok(true));
+            let just_below = f64::from_bits(1.0_f64.to_bits() - 1);
+            assert_eq!(origin.is_close_to_joint(other, just_below), Ok(false));
         }
     }
 
@@ -146,18 +149,26 @@ mod tests {
             Ok(false)
         );
         assert_eq!(canonical.is_close_to_joint(another_turn, TAU), Ok(true));
+        assert_eq!(
+            canonical.is_close_to_joint(another_turn, 2.0 * TAU),
+            Ok(true)
+        );
     }
 
     #[test]
-    fn joint_angles_closeness_handles_extreme_finite_differences() {
+    fn joint_angles_closeness_returns_false_for_unrepresentable_finite_differences() {
         assert_eq!(
             angles(f64::MAX, 0.0).is_close_to_joint(angles(0.0, 0.0), f64::MAX),
             Ok(true)
         );
-        assert_eq!(
-            angles(f64::MAX, 0.0).is_close_to_joint(angles(-f64::MAX, 0.0), f64::MAX),
-            Ok(false)
-        );
+        for (a, b) in [
+            (angles(f64::MAX, 0.0), angles(-f64::MAX, 0.0)),
+            (angles(0.0, f64::MAX), angles(0.0, -f64::MAX)),
+            (angles(f64::MAX, f64::MAX), angles(-f64::MAX, -f64::MAX)),
+        ] {
+            assert_eq!(a.is_close_to_joint(b, f64::MAX), Ok(false));
+            assert_eq!(b.is_close_to_joint(a, f64::MAX), Ok(false));
+        }
     }
 
     #[test]
@@ -185,16 +196,22 @@ mod tests {
     }
 
     #[test]
-    fn new_accepts_positive_finite_arm_lengths() {
-        assert!(Scara::new(150.0, 100.0).is_ok());
+    fn new_accepts_strictly_positive_finite_arm_lengths_at_all_scales() {
+        for lengths in [
+            (150.0, 100.0),
+            (f64::from_bits(1), f64::from_bits(1)),
+            (f64::MAX, f64::MAX),
+            (f64::MAX, f64::from_bits(1)),
+            (f64::from_bits(1), f64::MAX),
+        ] {
+            assert!(Scara::new(lengths.0, lengths.1).is_ok());
+        }
     }
 
     #[test]
-    fn new_rejects_non_positive_or_non_finite_arm_lengths() {
+    fn new_rejects_negative_or_non_finite_arm_lengths() {
         for lengths in [
-            (0.0, 100.0),
             (-1.0, 100.0),
-            (150.0, 0.0),
             (150.0, -1.0),
             (f64::INFINITY, 100.0),
             (150.0, f64::NEG_INFINITY),
@@ -203,7 +220,7 @@ mod tests {
         ] {
             assert!(matches!(
                 Scara::new(lengths.0, lengths.1),
-                Err(KinematicsError::ArmWithInvalidLength)
+                Err(KinematicsError::InvalidArmLength)
             ));
         }
     }
@@ -239,7 +256,112 @@ mod tests {
 
     #[test]
     fn point_distance_from_origin_is_correct() {
-        assert!((point(3.0, 4.0).distance_from_origin() - 5.0).abs() < ABSOLUTE_TOLERANCE);
+        assert_eq!(point(3.0, 4.0).distance_from_origin(), Ok(5.0));
+    }
+
+    #[test]
+    fn point_distance_from_origin_handles_signed_zero_subnormals_and_finite_extremes() {
+        for (x, y, expected) in [
+            (-0.0, 0.0, 0.0),
+            (f64::from_bits(1), 0.0, f64::from_bits(1)),
+            (0.0, -f64::MAX, f64::MAX),
+        ] {
+            assert_eq!(point(x, y).distance_from_origin(), Ok(expected));
+        }
+        assert_eq!(
+            point(f64::MAX, f64::MAX).distance_from_origin(),
+            Err(KinematicsError::NumericalFailure)
+        );
+    }
+
+    #[test]
+    fn joint_angles_closeness_matches_independent_integer_joint_limits() {
+        for a1 in -2_i32..=2 {
+            for a2 in -2_i32..=2 {
+                for b1 in -2_i32..=2 {
+                    for b2 in -2_i32..=2 {
+                        for tolerance in 0_u32..=4 {
+                            let expected =
+                                a1.abs_diff(b1) <= tolerance && a2.abs_diff(b2) <= tolerance;
+                            assert_eq!(
+                                angles(f64::from(a1), f64::from(a2)).is_close_to_joint(
+                                    angles(f64::from(b1), f64::from(b2)),
+                                    f64::from(tolerance),
+                                ),
+                                Ok(expected)
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn utilities_errors_convert_without_losing_the_original_variant() {
+        fn propagate(error: UtilitiesErrors) -> Result<(), KinematicsError> {
+            Err(error)?;
+            Ok(())
+        }
+        for error in [
+            UtilitiesErrors::NonFiniteF64,
+            UtilitiesErrors::NonPositiveF64,
+            UtilitiesErrors::NonNegativeF64,
+            UtilitiesErrors::NonZeroFiniteF64,
+            UtilitiesErrors::NonZeroFinitePositiveF64,
+        ] {
+            assert_eq!(
+                KinematicsError::from(error),
+                KinematicsError::Utilities(error)
+            );
+            assert_eq!(propagate(error), Err(KinematicsError::Utilities(error)));
+        }
+    }
+
+    #[test]
+    fn point_and_joint_angle_constructors_reject_signed_nan_payloads() {
+        for sign in [0, 1_u64 << 63] {
+            for payload in [1, 2, 1_u64 << 51, (1_u64 << 52) - 1] {
+                let nan = f64::from_bits(sign | (0x7ff_u64 << 52) | payload);
+                for (x, y) in [(nan, 0.0), (0.0, nan)] {
+                    assert_eq!(
+                        Point::new(x, y),
+                        Err(KinematicsError::Utilities(UtilitiesErrors::NonFiniteF64))
+                    );
+                    assert!(matches!(
+                        JointAngles::new(x, y),
+                        Err(KinematicsError::Utilities(UtilitiesErrors::NonFiniteF64))
+                    ));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn new_rejects_both_signed_zeros_in_either_arm() {
+        for zero in [-0.0, 0.0] {
+            for lengths in [(zero, 100.0), (100.0, zero), (zero, zero)] {
+                assert!(matches!(
+                    Scara::new(lengths.0, lengths.1),
+                    Err(KinematicsError::InvalidArmLength)
+                ));
+            }
+        }
+    }
+
+    #[test]
+    fn forward_reports_numerical_failure_when_absolute_angle_sum_overflows() {
+        let robot = Scara::new(100.0, 60.0).unwrap();
+        assert_eq!(
+            robot.forward(angles(f64::MAX, f64::MAX)),
+            Err(KinematicsError::NumericalFailure)
+        );
+    }
+
+    #[test]
+    fn inverse_reaches_a_known_target_when_the_second_arm_is_longer() {
+        let robot = Scara::new(60.0, 100.0).unwrap();
+        assert_point_round_trip(&robot, point(60.0, 100.0));
     }
 
     #[test]
@@ -347,7 +469,7 @@ mod tests {
     }
 
     #[test]
-    fn forward_reports_invalid_point_when_the_result_overflows() {
+    fn forward_reports_numerical_failure_when_the_result_overflows() {
         let robot = Scara::new(f64::MAX, f64::MAX).unwrap();
 
         assert!(matches!(
@@ -383,9 +505,11 @@ mod tests {
         configuration: ElbowConfiguration,
     ) -> JointAngles {
         let positive = matches!(configuration, ElbowConfiguration::Positive);
-        let angles = robot
-            .inverse(point, configuration)
-            .expect("point should be reachable");
+        let angles = robot.inverse(point, configuration).unwrap_or_else(|error| {
+            panic!(
+                "reachable point {point:?}, robot {robot:?}, branch {configuration:?}: {error:?}"
+            )
+        });
         assert!(angles.first_theta().is_finite(), "{point:?}: {angles:?}");
         assert!(angles.second_theta().is_finite(), "{point:?}: {angles:?}");
         if positive {
@@ -617,10 +741,11 @@ mod tests {
                 point(0.0, -largest_length),
             ] {
                 for configuration in configurations() {
-                    assert!(matches!(
-                        robot.inverse(point, configuration),
-                        Err(KinematicsError::NumericalFailure)
-                    ));
+                    let actual = robot.inverse(point, configuration);
+                    assert!(
+                        matches!(actual, Err(KinematicsError::NumericalFailure)),
+                        "robot {robot:?}, point {point:?}, branch {configuration:?}: {actual:?}"
+                    );
                 }
             }
         }
@@ -635,5 +760,57 @@ mod tests {
     #[test]
     fn inverse_returns_finite_angles_when_squared_lengths_underflow() {
         assert_scale_invariance(1e-200);
+    }
+
+    #[test]
+    fn inverse_normalizes_before_testing_an_overflowing_arm_sum_and_target_radius() {
+        let robot = Scara::new(f64::MAX, f64::MAX).unwrap();
+        let target = point(f64::MAX, f64::MAX);
+        assert_eq!(
+            target.distance_from_origin(),
+            Err(KinematicsError::NumericalFailure)
+        );
+
+        let positive = assert_inverse(&robot, target, ElbowConfiguration::Positive);
+        assert_angle_close(positive.first_theta(), 0.0);
+        assert_angle_close(positive.second_theta(), FRAC_PI_2);
+        let negative = assert_inverse(&robot, target, ElbowConfiguration::Negative);
+        assert_angle_close(negative.first_theta(), FRAC_PI_2);
+        assert_angle_close(negative.second_theta(), -FRAC_PI_2);
+    }
+
+    #[test]
+    fn inverse_classifies_unreachable_extreme_targets_in_every_quadrant() {
+        let robot = Scara::new(f64::MAX / 4.0, f64::MAX / 4.0).unwrap();
+        for x in [-f64::MAX, f64::MAX] {
+            for y in [-f64::MAX, f64::MAX] {
+                for configuration in configurations() {
+                    assert!(matches!(
+                        robot.inverse(point(x, y), configuration),
+                        Err(KinematicsError::UnreachablePoint)
+                    ));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn inverse_roundoff_tolerance_stays_relative_near_the_maximum_finite_scale() {
+        let arm = f64::MAX / 4.0;
+        let outer = arm + arm;
+        let inside_tolerance = f64::from_bits(outer.to_bits() + 1);
+        let outside_tolerance = outer * (1.0 + 1024.0 * f64::EPSILON);
+        let robot = Scara::new(arm, arm).unwrap();
+        for sign in [-1.0, 1.0] {
+            for configuration in configurations() {
+                let angles =
+                    assert_inverse(&robot, point(sign * inside_tolerance, 0.0), configuration);
+                assert_eq!(angles.second_theta().abs(), 0.0);
+                assert!(matches!(
+                    robot.inverse(point(sign * outside_tolerance, 0.0), configuration),
+                    Err(KinematicsError::UnreachablePoint)
+                ));
+            }
+        }
     }
 }

@@ -12,4 +12,5 @@ pub enum UtilitiesErrors {
     /// Se pasó un valor finito mayor que cero a [`crate::validate_finite_negativo`].
     NonNegativeF64,
     NonZeroFiniteF64,
+    NonZeroFinitePositiveF64,
 }

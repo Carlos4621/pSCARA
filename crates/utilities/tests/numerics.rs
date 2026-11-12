@@ -1,6 +1,6 @@
 use utilities::{
     UtilitiesErrors, validate_finite, validate_finite_negativo, validate_finite_positive,
-    validate_non_zero_finite,
+    validate_non_zero_finite, validate_non_zero_finite_positive,
 };
 
 const SMALLEST: f64 = f64::from_bits(1);
@@ -86,6 +86,10 @@ nonfinite_suite!(finite_nonfinite, validate_finite);
 nonfinite_suite!(positive_nonfinite, validate_finite_positive);
 nonfinite_suite!(negative_nonfinite, validate_finite_negativo);
 nonfinite_suite!(nonzero_nonfinite, validate_non_zero_finite);
+nonfinite_suite!(
+    nonzero_positive_nonfinite,
+    validate_non_zero_finite_positive
+);
 
 mod finite {
     use super::*;
@@ -276,6 +280,157 @@ mod nonzero {
             rejected, 0,
             "first rejected input and result: {first_rejection:?}"
         );
+    }
+}
+
+mod nonzero_positive {
+    use super::*;
+
+    #[test]
+    fn accepts_positive_boundaries_including_subnormals_and_maximum() {
+        for raw in boundary_magnitudes().into_iter().filter(|raw| *raw > 0.0) {
+            assert_eq!(
+                validate_non_zero_finite_positive(raw),
+                Ok(()),
+                "input: {raw:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_finite_negatives_with_a_sign_error_instead_of_a_zero_error() {
+        for magnitude in boundary_magnitudes().into_iter().filter(|raw| *raw > 0.0) {
+            assert_eq!(
+                validate_non_zero_finite_positive(-magnitude),
+                Err(UtilitiesErrors::NonPositiveF64)
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_both_signed_zeros_with_the_strict_positive_error() {
+        for zero in [0.0_f64, -0.0] {
+            assert_eq!(validate_finite_positive(zero), Ok(()));
+            assert_eq!(
+                validate_non_zero_finite_positive(zero),
+                Err(UtilitiesErrors::NonZeroFinitePositiveF64)
+            );
+        }
+    }
+
+    #[test]
+    fn every_sampled_finite_exponent_has_the_correct_strict_positive_domain() {
+        for raw in finite_samples() {
+            let expected = if raw > 0.0 {
+                Ok(())
+            } else if raw < 0.0 {
+                Err(UtilitiesErrors::NonPositiveF64)
+            } else {
+                Err(UtilitiesErrors::NonZeroFinitePositiveF64)
+            };
+            assert_eq!(
+                validate_non_zero_finite_positive(raw),
+                expected,
+                "bits: {:#018x}",
+                raw.to_bits()
+            );
+        }
+    }
+
+    #[test]
+    fn neighbors_of_zero_normal_boundary_and_maximum_keep_exact_error_categories() {
+        for bits in [0_u64, 1, 1_u64 << 52, f64::MAX.to_bits()] {
+            for neighbor in [bits.saturating_sub(1), bits, bits + 1] {
+                let magnitude = f64::from_bits(neighbor);
+                for sign in [-1.0, 1.0] {
+                    let expected = if !magnitude.is_finite() {
+                        Err(UtilitiesErrors::NonFiniteF64)
+                    } else if magnitude == 0.0 {
+                        Err(UtilitiesErrors::NonZeroFinitePositiveF64)
+                    } else if sign < 0.0 {
+                        Err(UtilitiesErrors::NonPositiveF64)
+                    } else {
+                        Ok(())
+                    };
+                    assert_eq!(
+                        validate_non_zero_finite_positive(sign * magnitude),
+                        expected
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn mixed_raw_bits_match_the_strict_positive_domain_and_error_priority() {
+        for raw in raw_bit_samples() {
+            let expected = if !raw.is_finite() {
+                Err(UtilitiesErrors::NonFiniteF64)
+            } else if raw > 0.0 {
+                Ok(())
+            } else if raw == 0.0 {
+                Err(UtilitiesErrors::NonZeroFinitePositiveF64)
+            } else {
+                Err(UtilitiesErrors::NonPositiveF64)
+            };
+            assert_eq!(
+                validate_non_zero_finite_positive(raw),
+                expected,
+                "bits: {:#018x}",
+                raw.to_bits()
+            );
+        }
+    }
+
+    #[test]
+    fn underflow_to_zero_is_rejected_while_a_positive_subnormal_remains_valid() {
+        assert_eq!(
+            validate_non_zero_finite_positive(f64::MIN_POSITIVE / 2.0),
+            Ok(())
+        );
+        for zero in [SMALLEST * 0.5, -SMALLEST * 0.5] {
+            assert_eq!(zero, 0.0);
+            assert_eq!(
+                validate_non_zero_finite_positive(zero),
+                Err(UtilitiesErrors::NonZeroFinitePositiveF64)
+            );
+        }
+    }
+
+    fn checked_reciprocal(denominator: f64) -> Result<f64, UtilitiesErrors> {
+        validate_non_zero_finite_positive(denominator)?;
+        let result = 1.0 / denominator;
+        validate_finite(result)?;
+        Ok(result)
+    }
+
+    #[test]
+    fn question_mark_composition_preserves_success_and_each_validation_error() {
+        assert_eq!(checked_reciprocal(2.0), Ok(0.5));
+        for zero in [0.0, -0.0] {
+            assert_eq!(
+                checked_reciprocal(zero),
+                Err(UtilitiesErrors::NonZeroFinitePositiveF64)
+            );
+        }
+        assert_eq!(
+            checked_reciprocal(-1.0),
+            Err(UtilitiesErrors::NonPositiveF64)
+        );
+        for raw in nan_samples().chain([f64::NEG_INFINITY, f64::INFINITY]) {
+            assert_eq!(checked_reciprocal(raw), Err(UtilitiesErrors::NonFiniteF64));
+        }
+    }
+
+    #[test]
+    fn a_valid_positive_denominator_still_requires_result_validation() {
+        assert_eq!(validate_non_zero_finite_positive(SMALLEST), Ok(()));
+        assert_eq!(
+            checked_reciprocal(SMALLEST),
+            Err(UtilitiesErrors::NonFiniteF64)
+        );
+        let tiny_reciprocal = checked_reciprocal(f64::MAX).unwrap();
+        assert!(tiny_reciprocal > 0.0 && tiny_reciprocal < f64::MIN_POSITIVE);
     }
 }
 

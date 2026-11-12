@@ -2,7 +2,7 @@ use kinematics::{ElbowConfiguration, JointAngles, KinematicsError, Point, Scara}
 use trajectory::LineSegment;
 
 fn segment(start: Point, end: Point) -> LineSegment {
-    LineSegment { start, end }
+    LineSegment::new(start, end).expect("test segment must have a finite length")
 }
 
 fn point(x: f64, y: f64) -> Point {
@@ -73,10 +73,10 @@ fn reachable_trajectories_round_trip_through_both_elbow_configurations() {
     for (line, maximum) in cases {
         let points = trajectory_points(&line, maximum);
         assert!(points.len() >= 2);
-        assert_eq!(points[0].x(), line.start.x());
-        assert_eq!(points[0].y(), line.start.y());
-        assert_eq!(points.last().unwrap().x(), line.end.x());
-        assert_eq!(points.last().unwrap().y(), line.end.y());
+        assert_eq!(points[0].x(), line.start().x());
+        assert_eq!(points[0].y(), line.start().y());
+        assert_eq!(points.last().unwrap().x(), line.end().x());
+        assert_eq!(points.last().unwrap().y(), line.end().y());
         for point in points {
             assert_inverse_forward_round_trip(&robot, point, 160.0);
         }
@@ -118,7 +118,7 @@ fn kinematics_rejects_only_the_trajectory_points_inside_the_inner_workspace_hole
 
     let mut unreachable_points = 0;
     for point in points {
-        let should_be_reachable = point.distance_from_origin() >= 40.0;
+        let should_be_reachable = point.distance_from_origin().unwrap() >= 40.0;
         if !should_be_reachable {
             unreachable_points += 1;
         }

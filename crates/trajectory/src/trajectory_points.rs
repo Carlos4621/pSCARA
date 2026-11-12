@@ -8,15 +8,19 @@ pub struct TrajectoryPoints<'a> {
     actual_index: usize,
     max_index: usize,
     is_completed: bool,
+    max_separation: f64,
+    last_point: Option<Point>,
 }
 
 impl<'a> TrajectoryPoints<'a> {
-    pub(crate) fn new(segment: &'a LineSegment, max_index: usize) -> Self {
+    pub(crate) fn new(segment: &'a LineSegment, max_index: usize, max_separation: f64) -> Self {
         Self {
             segment,
             actual_index: 0,
             max_index,
             is_completed: false,
+            max_separation,
+            last_point: None,
         }
     }
 
@@ -44,7 +48,25 @@ impl Iterator for TrajectoryPoints<'_> {
 
         self.actual_index = self.actual_index.wrapping_add(1); // El desbordamiento es irrelevante porque la variable ya no se usará nunca más
 
-        let result = self.segment.point_at(t);
+        let result = self.segment.point_at(t).and_then(|point| {
+            let result = match self.last_point {
+                Some(last_point) => {
+                    if !point
+                        .is_close_to_point(last_point, self.max_separation)
+                        .map_err(|_| TrajectoryError::PrecissionLost)?
+                    {
+                        return Err(TrajectoryError::PrecissionLost);
+                    }
+
+                    Ok(point)
+                },
+                None => Ok(point),
+            };
+
+            self.last_point = Some(point);
+
+            result
+        });
 
         if result.is_err() {
             self.is_completed = true;

@@ -5,4 +5,6 @@ pub enum TrajectoryError {
     SegmentNonFinite,
     InvalidMaxPointDistance,
     TooManySegments,
+    InvalidSegmentNumber,
+    PrecissionLost,
 }

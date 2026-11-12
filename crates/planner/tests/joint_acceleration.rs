@@ -425,10 +425,11 @@ fn acceleration_limited_time_is_never_less_than_velocity_only_time() {
 #[test]
 fn duration_accepts_samples_from_a_validated_trajectory_in_both_configurations() {
     let robot = Scara::new(100.0, 60.0).unwrap();
-    let path = LineSegment {
-        start: Point::new(160.0, 0.0).unwrap(),
-        end: Point::new(100.0, 60.0).unwrap(),
-    };
+    let path = LineSegment::new(
+        Point::new(160.0, 0.0).unwrap(),
+        Point::new(100.0, 60.0).unwrap(),
+    )
+    .expect("test segment must have a finite length");
     for configuration in [ElbowConfiguration::Positive, ElbowConfiguration::Negative] {
         let samples: Vec<_> = JointTrajectory::new(&robot, &path, f64::MAX, configuration)
             .unwrap()
@@ -447,9 +448,8 @@ fn duration_accepts_samples_from_a_validated_trajectory_in_both_configurations()
     }
 }
 
-// Regressions intentionally describe the mathematically expected behavior.
-// Production numerical fixes are outside this test-only review. Run with
-// `cargo test -p planner --test joint_acceleration -- --ignored` to reproduce.
+// These numerical regressions run normally after sharing the stable scalar
+// duration calculation with MotionProfile.
 
 #[test]
 fn regression_stationary_joint_takes_zero_time_even_when_speed_squared_underflows() {
@@ -474,7 +474,6 @@ fn regression_stationary_joint_cannot_delay_another_joints_valid_move() {
 }
 
 #[test]
-#[ignore = "known defect: v*v underflow selects a trapezoid for triangular motion"]
 fn regression_small_common_scale_preserves_the_triangular_profile() {
     let scale = power_of_two(-600);
     assert_duration(
@@ -487,7 +486,6 @@ fn regression_small_common_scale_preserves_the_triangular_profile() {
 }
 
 #[test]
-#[ignore = "known defect: v*v overflow selects a triangle and violates the speed cap"]
 fn regression_large_common_scale_preserves_the_trapezoidal_profile() {
     let scale = power_of_two(600);
     assert_duration(
@@ -511,7 +509,6 @@ fn extreme_critical_distance_can_have_a_representable_positive_duration() {
 }
 
 #[test]
-#[ignore = "known defect: delta/a underflow returns zero for nonzero motion"]
 fn regression_underflowed_quotient_still_has_a_representable_positive_duration() {
     assert_duration(
         angles(0.0, 0.0),
@@ -523,7 +520,6 @@ fn regression_underflowed_quotient_still_has_a_representable_positive_duration()
 }
 
 #[test]
-#[ignore = "known defect: delta/a overflow rejects a representable triangular duration"]
 fn regression_overflowed_quotient_still_has_a_representable_finite_duration() {
     assert_duration(
         angles(0.0, 0.0),

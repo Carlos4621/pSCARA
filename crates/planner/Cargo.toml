@@ -7,3 +7,4 @@ edition = "2024"
 kinematics = { path = "../kinematics" }
 libm = "0.2.16"
 trajectory = { path = "../trajectory" }
+utilities = { path = "../utilities" }

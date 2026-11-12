@@ -8,10 +8,8 @@ const ANGLE_TOLERANCE: f64 = 1e-10;
 const MIN_POSITIVE_STEP: f64 = f64::from_bits(1);
 
 fn line(start: (f64, f64), end: (f64, f64)) -> LineSegment {
-    LineSegment {
-        start: point(start.0, start.1),
-        end: point(end.0, end.1),
-    }
+    LineSegment::new(point(start.0, start.1), point(end.0, end.1))
+        .expect("test segment must have a finite length")
 }
 
 fn point(x: f64, y: f64) -> Point {
@@ -128,25 +126,59 @@ fn new_propagates_invalid_maximum_distance_errors_before_checking_reachability()
 }
 
 #[test]
-fn new_propagates_unrepresentable_segment_and_excessive_resolution_errors_exactly() {
+fn invalid_segments_are_rejected_before_planning_and_resolution_errors_are_preserved() {
     let robot = Scara::new(100.0, 60.0).unwrap();
 
-    for path in [
-        line((-f64::MAX, 0.0), (f64::MAX, 0.0)),
-        line((0.0, 0.0), (f64::MAX, f64::MAX)),
+    for (start, end) in [
+        (point(-f64::MAX, 0.0), point(f64::MAX, 0.0)),
+        (point(0.0, 0.0), point(f64::MAX, f64::MAX)),
     ] {
-        assert_eq!(
-            JointTrajectory::new(&robot, &path, 1.0, ElbowConfiguration::Positive).unwrap_err(),
-            PlannerError::Trajectory(TrajectoryError::SegmentNonFinite)
-        );
+        assert!(matches!(
+            LineSegment::new(start, end),
+            Err(TrajectoryError::SegmentNonFinite)
+        ));
     }
 
     let path = line((0.0, 0.0), (1.0, 0.0));
-    for maximum in [f64::from_bits(1), 1.0 / ((usize::MAX as f64) * 2.0)] {
+    for (maximum, error) in [
+        (f64::from_bits(1), TrajectoryError::InvalidSegmentNumber),
+        (
+            1.0 / ((usize::MAX as f64) * 2.0),
+            TrajectoryError::TooManySegments,
+        ),
+    ] {
         assert_eq!(
             JointTrajectory::new(&robot, &path, maximum, ElbowConfiguration::Negative).unwrap_err(),
-            PlannerError::Trajectory(TrajectoryError::TooManySegments)
+            PlannerError::Trajectory(error)
         );
+    }
+}
+
+#[test]
+fn cartesian_precision_loss_propagates_once_and_prevents_validated_wrappers() {
+    let robot = Scara::new(1e16, 1e16).unwrap();
+    let path = line((1e16, 0.0), (1e16 + 4.0, 0.0));
+    let expected = PlannerError::Trajectory(TrajectoryError::PrecissionLost);
+    for configuration in configurations() {
+        let mut trajectory = JointTrajectory::new(&robot, &path, 1.0, configuration).unwrap();
+        assert_eq!(trajectory.clone().validate(), Err(expected));
+        assert_eq!(trajectory.clone().into_validated().unwrap_err(), expected);
+        // Refinement retries excessive joint steps, not Cartesian precision failures.
+        assert_eq!(
+            trajectory
+                .clone()
+                .into_validated_with_refinement(8)
+                .unwrap_err(),
+            expected
+        );
+        let first = trajectory.next().unwrap().unwrap();
+        let repeated = trajectory.next().unwrap().unwrap();
+        assert_angles_exact(first, repeated);
+        assert_next_error(trajectory.next(), expected);
+        assert!(trajectory.next().is_none());
+        assert!(trajectory.next().is_none());
+        let mut finished_clone = trajectory.clone();
+        assert!(finished_clone.next().is_none());
     }
 }
 
@@ -197,10 +229,11 @@ fn forward_joint_trajectory_forward_round_trip_covers_a_joint_angle_grid() {
 
     for (start_first, start_second) in angle_pairs {
         for (end_first, end_second) in angle_pairs {
-            let path = LineSegment {
-                start: forward(&robot, angles(start_first, start_second)),
-                end: forward(&robot, angles(end_first, end_second)),
-            };
+            let path = LineSegment::new(
+                forward(&robot, angles(start_first, start_second)),
+                forward(&robot, angles(end_first, end_second)),
+            )
+            .expect("test segment must have a finite length");
             let expected_points: Vec<_> = path.points(5.0).unwrap().map(Result::unwrap).collect();
 
             for configuration in configurations() {
@@ -306,10 +339,7 @@ fn configuration_selects_the_expected_inverse_branch() {
 fn degenerate_reachable_path_emits_both_endpoint_samples_then_stays_finished() {
     let robot = Scara::new(100.0, 60.0).unwrap();
     let point = forward(&robot, angles(0.7, -1.2));
-    let path = LineSegment {
-        start: point,
-        end: point,
-    };
+    let path = LineSegment::new(point, point).expect("test segment must have a finite length");
     let mut trajectory =
         JointTrajectory::new(&robot, &path, f64::MAX, ElbowConfiguration::Negative).unwrap();
 
@@ -436,7 +466,7 @@ fn max_joint_step_starts_comparing_after_the_first_sample_without_an_initial_pos
     let path = line((160.0, 0.0), (140.0, 0.0));
 
     for configuration in configurations() {
-        let expected_first = robot.inverse(path.start, configuration).unwrap();
+        let expected_first = robot.inverse(path.start(), configuration).unwrap();
         let mut trajectory = JointTrajectory::new(&robot, &path, f64::MAX, configuration)
             .unwrap()
             .with_max_joint_step(MIN_POSITIVE_STEP)
@@ -488,10 +518,8 @@ fn max_joint_step_is_inclusive_and_checks_each_joint_independently() {
     ];
 
     for (start_angles, end_angles, first_joint_dominates) in cases {
-        let path = LineSegment {
-            start: forward(&robot, start_angles),
-            end: forward(&robot, end_angles),
-        };
+        let path = LineSegment::new(forward(&robot, start_angles), forward(&robot, end_angles))
+            .expect("test segment must have a finite length");
         let expected: Vec<_> =
             JointTrajectory::new(&robot, &path, f64::MAX, ElbowConfiguration::Positive)
                 .unwrap()
@@ -700,7 +728,7 @@ fn with_limits_rejects_either_joint_on_the_first_sample_and_then_stays_finished(
     let configuration = ElbowConfiguration::Positive;
     let expected = angles(0.4, 0.8);
     let start = forward(&robot, expected);
-    let path = LineSegment { start, end: start };
+    let path = LineSegment::new(start, start).expect("test segment must have a finite length");
     let solved = robot.inverse(start, configuration).unwrap();
     let rejected_limits = [
         limits(
@@ -740,7 +768,7 @@ fn with_limits_returns_the_accepted_prefix_then_stops_at_the_first_violation() {
             .unwrap()
             .with_limits(&joint_limits)
             .unwrap();
-        let expected = robot.inverse(path.start, configuration).unwrap();
+        let expected = robot.inverse(path.start(), configuration).unwrap();
 
         assert_angles_exact(unwrap_angles(trajectory.next()), expected);
         assert_next_error(trajectory.next(), PlannerError::AngleOutOfLimits);
@@ -858,7 +886,7 @@ fn with_initial_position_preserves_the_requested_equivalent_turn() {
     let path = line((-100.0, 0.0), (-100.0, -1.0));
 
     for configuration in configurations() {
-        let canonical = robot.inverse(path.start, configuration).unwrap();
+        let canonical = robot.inverse(path.start(), configuration).unwrap();
         let initial = angles(
             canonical.first_theta() + core::f64::consts::TAU,
             canonical.second_theta() - core::f64::consts::TAU,
@@ -1059,7 +1087,7 @@ fn limits_after_initial_position_validate_the_stored_noncanonical_turn() {
     let path = line((-100.0, 0.0), (-100.0, 0.0));
 
     for configuration in configurations() {
-        let canonical = robot.inverse(path.start, configuration).unwrap();
+        let canonical = robot.inverse(path.start(), configuration).unwrap();
         let initial = angles(
             canonical.first_theta() + core::f64::consts::TAU,
             canonical.second_theta(),
@@ -1096,7 +1124,7 @@ fn initial_position_and_limits_can_select_a_noncanonical_turn() {
     let robot = Scara::new(100.0, 60.0).unwrap();
     let path = line((-100.0, 0.0), (-100.0, -1.0));
     let configuration = ElbowConfiguration::Positive;
-    let canonical = robot.inverse(path.start, configuration).unwrap();
+    let canonical = robot.inverse(path.start(), configuration).unwrap();
     let initial = angles(
         canonical.first_theta() + core::f64::consts::TAU,
         canonical.second_theta(),
@@ -1137,7 +1165,7 @@ fn with_initial_position_accepts_the_configured_elbow_branch() {
     let path = line((100.0, 50.0), (100.0, 50.0));
 
     for configuration in configurations() {
-        let initial = robot.inverse(path.start, configuration).unwrap();
+        let initial = robot.inverse(path.start(), configuration).unwrap();
 
         assert!(
             JointTrajectory::new(&robot, &path, f64::MAX, configuration)
@@ -1157,7 +1185,7 @@ fn with_initial_position_rejects_the_opposite_elbow_branch() {
         (ElbowConfiguration::Positive, ElbowConfiguration::Negative),
         (ElbowConfiguration::Negative, ElbowConfiguration::Positive),
     ] {
-        let initial = robot.inverse(path.start, opposite).unwrap();
+        let initial = robot.inverse(path.start(), opposite).unwrap();
 
         assert_eq!(
             JointTrajectory::new(&robot, &path, f64::MAX, configured)
@@ -1273,7 +1301,7 @@ fn new_rejects_an_unreachable_segment_before_attempting_inverse_kinematics() {
             // Inverse kinematics at the start loses the shorter arm during
             // normalization. The end is outside the reachable annulus.
             assert!(matches!(
-                robot.inverse(path.start, configuration),
+                robot.inverse(path.start(), configuration),
                 Err(KinematicsError::NumericalFailure)
             ));
             assert_eq!(
@@ -1291,10 +1319,10 @@ fn new_propagates_segment_numerical_errors_even_when_each_endpoint_is_reachable(
         line((f64::MAX / 2.0, 0.0), (f64::MAX / 2.0, MIN_POSITIVE_STEP)),
         line((f64::MAX / 2.0, MIN_POSITIVE_STEP), (f64::MAX / 2.0, 0.0)),
     ] {
-        assert_ne!(path.start, path.end);
+        assert_ne!(path.start(), path.end());
         for configuration in configurations() {
-            assert!(robot.inverse(path.start, configuration).is_ok());
-            assert!(robot.inverse(path.end, configuration).is_ok());
+            assert!(robot.inverse(path.start(), configuration).is_ok());
+            assert!(robot.inverse(path.end(), configuration).is_ok());
             // Segment normalization erases the difference between endpoints;
             // the constructor propagates this error rather than accepting them.
             assert_eq!(
@@ -1323,7 +1351,9 @@ fn validation_accepts_complete_boundary_segments_without_consuming_the_wrapper()
         ] {
             for configuration in configurations() {
                 let trajectory =
-                    JointTrajectory::new(&robot, &path, scale / 2.0, configuration).unwrap();
+                    // Leave spacing margin: this fixture tests wrapper validation;
+                    // strict Cartesian precision errors have separate regressions.
+                    JointTrajectory::new(&robot, &path, 0.6 * scale, configuration).unwrap();
                 let expected: Vec<_> = trajectory.clone().map(Result::unwrap).collect();
                 assert_eq!(trajectory.clone().validate(), Ok(()));
                 let validated = trajectory.clone().into_validated().unwrap();
@@ -1436,7 +1466,7 @@ fn validate_accepts_noncanonical_initial_turns_with_matching_limits() {
     let path = line((-100.0, 0.0), (-100.0, 0.0));
 
     for configuration in configurations() {
-        let canonical = robot.inverse(path.start, configuration).unwrap();
+        let canonical = robot.inverse(path.start(), configuration).unwrap();
         let initial = angles(
             canonical.first_theta() + core::f64::consts::TAU,
             canonical.second_theta() - core::f64::consts::TAU,
@@ -1495,7 +1525,7 @@ fn into_validated_preserves_initial_position_unwrapping_and_limits() {
     let path = line((-100.0, 0.0), (-100.0, -1.0));
 
     for configuration in configurations() {
-        let canonical = robot.inverse(path.start, configuration).unwrap();
+        let canonical = robot.inverse(path.start(), configuration).unwrap();
         let initial = angles(
             canonical.first_theta() + core::f64::consts::TAU,
             canonical.second_theta() - core::f64::consts::TAU,
@@ -1679,7 +1709,7 @@ fn refinement_preserves_initial_turns_limits_and_branch_cut_unwrapping() {
     let path = line((-100.0, 1.0), (-100.0, -1.0));
 
     for configuration in configurations() {
-        let canonical = robot.inverse(path.start, configuration).unwrap();
+        let canonical = robot.inverse(path.start(), configuration).unwrap();
         let initial = angles(
             canonical.first_theta() + core::f64::consts::TAU,
             canonical.second_theta() - core::f64::consts::TAU,
@@ -1732,7 +1762,7 @@ fn refinement_accepts_degenerate_paths_and_subnormal_spacing() {
             let second = unwrap_angles(validated.next());
             assert_eq!(second.first_theta(), first.first_theta());
             assert_eq!(second.second_theta(), first.second_theta());
-            assert_point_close(forward(&robot, first), path.start, 160.0);
+            assert_point_close(forward(&robot, first), path.start(), 160.0);
             assert!(validated.next().is_none());
             assert!(validated.next().is_none());
         }
@@ -2000,7 +2030,7 @@ fn refinement_rejects_spacing_that_underflows_to_zero() {
         );
         assert_eq!(
             trajectory.into_validated_with_refinement(1).unwrap_err(),
-            PlannerError::Kinematics(KinematicsError::NumericalFailure)
+            PlannerError::NumericalFailure
         );
     }
 }

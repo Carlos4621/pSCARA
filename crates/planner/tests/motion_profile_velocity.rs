@@ -1,7 +1,7 @@
 use planner::{MotionProfile, PlannerError};
 
 // Ordinary API inputs stay in [-10000, 10000]. Precision regressions at the
-// bottom deliberately bypass these helpers and document their ignored status.
+// bottom deliberately bypass these helpers to cover extreme finite scales.
 fn bounded(value: f64) -> f64 {
     assert!(
         (-10000.0..=10000.0).contains(&value),
@@ -373,13 +373,10 @@ fn scaling_limits_rescales_velocity_and_time_consistently() {
     }
 }
 
-// Precision/IEEE boundary cases remain ignored as requested. Failures below
-// record the exact arithmetic problem; the nonfinite-time case verifies
-// intentional InvalidTime rejection rather than claiming an implementation bug.
-// Reproduce: cargo test -p planner --test motion_profile_velocity -- --ignored
+// Numerical regressions run normally. The separately marked IEEE validation
+// case can also be included with --include-ignored.
 
 #[test]
-#[ignore = "precision defect: a 1e-17 ramp is absorbed by the unit cruise time; velocity_at(total_time) returns the cruise speed instead of rest"]
 fn regression_absorbed_ramps_still_end_with_zero_velocity() {
     for end in [1e-13, -1e-13] {
         let motion = MotionProfile::new(0.0, end, 10000.0, 1e-13).unwrap();
@@ -388,7 +385,6 @@ fn regression_absorbed_ramps_still_end_with_zero_velocity() {
 }
 
 #[test]
-#[ignore = "inherited precision defect: v*v underflow assigns two ramps to stationary motion and velocity_at reports nonzero speed"]
 fn regression_stationary_motion_has_zero_velocity_with_subnormal_limits() {
     let smallest = f64::from_bits(1);
     let motion = MotionProfile::new(-1.0, -1.0, smallest, smallest).unwrap();

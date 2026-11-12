@@ -633,12 +633,10 @@ fn constructed_velocity_profiles_recover_their_integrated_positions() {
     }
 }
 
-// Extreme numerical regressions are deliberately excluded from the mandatory
-// ordinary signed suite. Each ignore records the precision boundary it covers.
-// Reproduce with: cargo test -p planner --test motion_profile -- --ignored
+// Extreme numerical regressions run normally after stabilizing profile creation
+// and preserving exact endpoint samples.
 
 #[test]
-#[ignore = "precision defect: a*d underflows to zero, yielding zero peak speed and zero time for nonzero motion"]
 fn regression_underflowed_product_still_has_a_finite_triangular_duration() {
     let scale = 2.0_f64.powi(-600);
     let motion = MotionProfile::new(0.0, scale, scale, 1.0).unwrap();
@@ -646,7 +644,6 @@ fn regression_underflowed_product_still_has_a_finite_triangular_duration() {
 }
 
 #[test]
-#[ignore = "precision defect: underflowed peak makes total_time zero, so position_at(0) jumps directly to end_angle"]
 fn regression_underflowed_peak_preserves_the_start_at_time_zero() {
     let scale = 2.0_f64.powi(-600);
     let motion = MotionProfile::new(0.0, scale, scale, 1.0).unwrap();
@@ -654,7 +651,6 @@ fn regression_underflowed_peak_preserves_the_start_at_time_zero() {
 }
 
 #[test]
-#[ignore = "precision defect: a*d overflows although its square root and total duration are representable"]
 fn regression_overflowed_product_still_has_a_finite_triangular_duration() {
     let scale = 2.0_f64.powi(600);
     let motion = MotionProfile::new(0.0, scale, scale, scale).unwrap();
@@ -662,7 +658,6 @@ fn regression_overflowed_product_still_has_a_finite_triangular_duration() {
 }
 
 #[test]
-#[ignore = "precision defect: v*v and peak^2 underflow, corrupting the threshold and cruise duration"]
 fn regression_small_common_scale_preserves_a_triangular_duration() {
     let scale = 2.0_f64.powi(-600);
     let motion = MotionProfile::new(0.0, scale / 2.0, scale, scale).unwrap();
@@ -670,14 +665,12 @@ fn regression_small_common_scale_preserves_a_triangular_duration() {
 }
 
 #[test]
-#[ignore = "extreme precision case: a huge cruise absorbs ramp times; stored end_angle now preserves the exact final sample"]
 fn regression_final_position_is_exact_even_when_ramp_times_are_absorbed() {
     let motion = MotionProfile::new(0.0, 1.0, 1.0, 1e-300).unwrap();
     assert_eq!(motion.position_at(motion.total_time()), Ok(1.0));
 }
 
 #[test]
-#[ignore = "precision defect: v*v underflows to zero and stationary motion incorrectly receives two nonzero ramps"]
 fn regression_stationary_negative_angle_takes_zero_time_with_subnormal_limits() {
     let smallest = f64::from_bits(1);
     let motion = MotionProfile::new(-1000.0, -1000.0, smallest, smallest).unwrap();

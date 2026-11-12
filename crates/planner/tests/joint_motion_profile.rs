@@ -446,10 +446,11 @@ fn new_acceleration_accessors_preserve_joint_order_and_values() {
 #[test]
 fn profiles_accept_validated_trajectory_samples_in_both_elbow_configurations() {
     let robot = Scara::new(100.0, 60.0).unwrap();
-    let path = LineSegment {
-        start: Point::new(160.0, 0.0).unwrap(),
-        end: Point::new(100.0, 60.0).unwrap(),
-    };
+    let path = LineSegment::new(
+        Point::new(160.0, 0.0).unwrap(),
+        Point::new(100.0, 60.0).unwrap(),
+    )
+    .expect("test segment must have a finite length");
     for configuration in [ElbowConfiguration::Positive, ElbowConfiguration::Negative] {
         let samples: Vec<_> = JointTrajectory::new(&robot, &path, 10000.0, configuration)
             .unwrap()
@@ -467,9 +468,8 @@ fn profiles_accept_validated_trajectory_samples_in_both_elbow_configurations() {
     }
 }
 
-// Precision regressions are intentionally ignored. Every case asserts the
-// desired mathematical behavior and documents why the current code fails.
-// Reproduce: cargo test -p planner --test joint_motion_profile -- --ignored
+// Numerical regressions remain active to protect synchronized extreme-scale
+// behavior after replacing intermediate time-factor calculations.
 
 fn extreme_profile(end: [f64; 2], speeds: [f64; 2], accelerations: [f64; 2]) -> JointMotionProfile {
     JointMotionProfile::new(
@@ -482,7 +482,6 @@ fn extreme_profile(end: [f64; 2], speeds: [f64; 2], accelerations: [f64; 2]) -> 
 }
 
 #[test]
-#[ignore = "precision defect: time*axis_duration overflows before division, rejecting a valid interior time as InvalidTime"]
 fn regression_large_duration_rescaling_keeps_a_valid_midpoint() {
     for swap in [false, true] {
         let motion = if swap {
@@ -503,7 +502,6 @@ fn regression_large_duration_rescaling_keeps_a_valid_midpoint() {
 }
 
 #[test]
-#[ignore = "precision defect: time*axis_duration underflows to zero before division, freezing a moving joint at its start"]
 fn regression_tiny_duration_rescaling_preserves_a_nonzero_midpoint() {
     let scale = 2.0_f64.powi(-600);
     let motion = extreme_profile([scale, 0.0], [1.0, 1.0], [2.0_f64.powi(600), 1.0]);
@@ -513,7 +511,6 @@ fn regression_tiny_duration_rescaling_preserves_a_nonzero_midpoint() {
 }
 
 #[test]
-#[ignore = "inherited precision defect: a*d underflows in MotionProfile, and a zero-duration axis jumps to its end at global time zero"]
 fn regression_underflowed_axis_keeps_its_start_while_the_other_axis_moves() {
     let scale = 2.0_f64.powi(-600);
     let motion = extreme_profile([scale, 1.0], [1.0, 4.0], [scale, 4.0]);
@@ -521,7 +518,6 @@ fn regression_underflowed_axis_keeps_its_start_while_the_other_axis_moves() {
 }
 
 #[test]
-#[ignore = "inherited precision defect: v*v underflows in stationary scalar profiles, assigning two nonzero ramps to zero movement"]
 fn regression_stationary_joints_have_zero_duration_with_subnormal_limits() {
     let smallest = f64::from_bits(1);
     let motion = extreme_profile([0.0, 0.0], [smallest, smallest], [smallest, smallest]);
@@ -529,7 +525,6 @@ fn regression_stationary_joints_have_zero_duration_with_subnormal_limits() {
 }
 
 #[test]
-#[ignore = "inherited precision defect: a*d overflows before sqrt even though the synchronized two-second duration is representable"]
 fn regression_finite_duration_is_not_rejected_when_scalar_products_overflow() {
     let scale = 2.0_f64.powi(600);
     let motion = extreme_profile([scale, scale], [scale, scale], [scale, scale]);

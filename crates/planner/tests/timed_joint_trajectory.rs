@@ -14,10 +14,11 @@ fn configurations() -> [ElbowConfiguration; 2] {
 }
 
 fn line(start: (f64, f64), end: (f64, f64)) -> LineSegment {
-    LineSegment {
-        start: Point::new(start.0, start.1).unwrap(),
-        end: Point::new(end.0, end.1).unwrap(),
-    }
+    LineSegment::new(
+        Point::new(start.0, start.1).unwrap(),
+        Point::new(end.0, end.1).unwrap(),
+    )
+    .expect("test segment must have a finite length")
 }
 
 fn validated<'a>(
@@ -90,9 +91,9 @@ fn first_sample_is_at_zero_and_a_known_single_move_has_the_expected_duration() {
             assert_eq!(start.time_elapsed, 0.0);
             assert_angles_exact(
                 start.angle,
-                robot.inverse(path.start, configuration).unwrap(),
+                robot.inverse(path.start(), configuration).unwrap(),
             );
-            assert_angles_exact(end.angle, robot.inverse(path.end, configuration).unwrap());
+            assert_angles_exact(end.angle, robot.inverse(path.end(), configuration).unwrap());
             // The second joint moves pi/2 radians in either elbow branch.
             assert_close(end.time_elapsed, expected);
             assert!(timed.next().is_none());
@@ -109,7 +110,9 @@ fn every_angle_is_preserved_and_times_accumulate_the_independent_velocity_limits
         for configuration in configurations() {
             for (first_speed, second_speed) in [(0.25, 10.0), (10.0, 0.25), (1.0, 2.0)] {
                 let trajectory =
-                    JointTrajectory::new(&robot, &path, 5.0 * scale, configuration).unwrap();
+                    // Four intervals with margin for Cartesian rounding; the
+                    // independent timing oracle below is unchanged.
+                    JointTrajectory::new(&robot, &path, 6.0 * scale, configuration).unwrap();
                 let expected: Vec<_> = trajectory.clone().map(Result::unwrap).collect();
                 assert!(expected.len() > 2);
                 let actual: Vec<_> = TimedJointTrajectory::new(
@@ -233,7 +236,7 @@ fn timing_preserves_initial_turns_limits_and_branch_cut_unwrapping() {
     let robot = Scara::new(100.0, 60.0).unwrap();
     let path = line((-100.0, 1.0), (-100.0, -1.0));
     for configuration in configurations() {
-        let canonical = robot.inverse(path.start, configuration).unwrap();
+        let canonical = robot.inverse(path.start(), configuration).unwrap();
         let initial = JointAngles::new(
             canonical.first_theta() + TAU,
             canonical.second_theta() - TAU,

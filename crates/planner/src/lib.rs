@@ -1,5 +1,7 @@
 #![no_std]
 
+mod profile_math;
+
 mod planner_error;
 pub use planner_error::PlannerError;
 

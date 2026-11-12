@@ -447,10 +447,8 @@ fn scaling_limits_rescales_global_velocity_and_shared_time() {
     }
 }
 
-// Precision and IEEE boundary cases are ignored as requested. Defect cases
-// below assert the desired behavior and explain the failing intermediate
-// operation. The nonfinite-time case checks intentional InvalidTime rejection.
-// Reproduce: cargo test -p planner --test joint_motion_profile_velocity -- --ignored
+// Numerical regressions run normally. The separately marked IEEE validation
+// case can also be included with --include-ignored.
 
 fn extreme(end: [f64; 2], speeds: [f64; 2], accelerations: [f64; 2]) -> JointMotionProfile {
     JointMotionProfile::new(
@@ -463,7 +461,6 @@ fn extreme(end: [f64; 2], speeds: [f64; 2], accelerations: [f64; 2]) -> JointMot
 }
 
 #[test]
-#[ignore = "precision defect: axis_duration/total_time underflows before multiplication by a large local velocity, losing a representable global speed"]
 fn regression_tiny_time_factor_preserves_a_representable_global_velocity() {
     let motion = extreme(
         [2.0_f64.powi(-200), 1.0],
@@ -477,7 +474,6 @@ fn regression_tiny_time_factor_preserves_a_representable_global_velocity() {
 }
 
 #[test]
-#[ignore = "precision defect: time/total_time underflows to zero before local-time rescaling, losing a valid early-ramp speed"]
 fn regression_tiny_progress_preserves_a_representable_ramp_velocity() {
     let speed = 2.0_f64.powi(-600);
     let motion = extreme([1.0, 0.0], [speed, 1.0], [1.0, 1.0]);
@@ -486,14 +482,12 @@ fn regression_tiny_progress_preserves_a_representable_ramp_velocity() {
 }
 
 #[test]
-#[ignore = "inherited precision defect: absorbed scalar ramp times select cruise at the endpoint, propagating nonzero final velocity"]
 fn regression_absorbed_scalar_ramps_still_end_with_both_axes_at_rest() {
     let motion = extreme([1e-13, 1.0], [1e-13, 4.0], [10000.0, 4.0]);
     assert_eq!(motion.velocity_at(motion.total_time()), Ok((0.0, 0.0)));
 }
 
 #[test]
-#[ignore = "inherited precision defect: v*v underflow gives a stationary axis nonzero duration and nonzero reported velocity"]
 fn regression_stationary_axis_keeps_zero_velocity_with_subnormal_limits() {
     let smallest = f64::from_bits(1);
     let motion = extreme([0.0, 1.0], [smallest, 4.0], [smallest, 4.0]);

@@ -14,10 +14,11 @@ fn configurations() -> [ElbowConfiguration; 2] {
 }
 
 fn line(start: (f64, f64), end: (f64, f64)) -> LineSegment {
-    LineSegment {
-        start: Point::new(start.0, start.1).unwrap(),
-        end: Point::new(end.0, end.1).unwrap(),
-    }
+    LineSegment::new(
+        Point::new(start.0, start.1).unwrap(),
+        Point::new(end.0, end.1).unwrap(),
+    )
+    .expect("test segment must have a finite length")
 }
 
 fn timed<'a>(
@@ -231,7 +232,7 @@ fn the_wrapper_preserves_initial_turns_limits_and_branch_cut_unwrapping() {
     let robot = Scara::new(100.0, 60.0).unwrap();
     let path = line((-100.0, 1.0), (-100.0, -1.0));
     for configuration in configurations() {
-        let canonical = robot.inverse(path.start, configuration).unwrap();
+        let canonical = robot.inverse(path.start(), configuration).unwrap();
         let initial = JointAngles::new(
             canonical.first_theta() + TAU,
             canonical.second_theta() - TAU,

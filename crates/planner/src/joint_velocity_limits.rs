@@ -13,13 +13,10 @@ impl JointVelocityLimits {
         first_joint_max_velocity: f64,
         second_joint_max_velocity: f64,
     ) -> Result<Self, PlannerError> {
-        if !first_joint_max_velocity.is_finite()
-            || !second_joint_max_velocity.is_finite()
-            || first_joint_max_velocity <= 0.0
-            || second_joint_max_velocity <= 0.0
-        {
-            return Err(PlannerError::InvalidJointVelocity);
-        }
+        utilities::validate_non_zero_finite_positive(first_joint_max_velocity)
+            .map_err(|_| PlannerError::InvalidJointVelocity)?;
+        utilities::validate_non_zero_finite_positive(second_joint_max_velocity)
+            .map_err(|_| PlannerError::InvalidJointVelocity)?;
 
         Ok(Self {
             first_joint_max_velocity,
@@ -39,17 +36,15 @@ impl JointVelocityLimits {
             return Ok(0.0); // El único caso válido para cero
         }
 
-        if !first_delta.is_finite() || !second_delta.is_finite() {
-            return Err(PlannerError::AngleNonFinite);
-        }
+        utilities::validate_finite(first_delta).map_err(|_| PlannerError::NumericalFailure)?;
+        utilities::validate_finite(second_delta).map_err(|_| PlannerError::NumericalFailure)?;
 
         let first_joint_time = first_delta / self.first_joint_max_velocity;
         let second_joint_time = second_delta / self.second_joint_max_velocity;
         let max_time = first_joint_time.max(second_joint_time);
 
-        if !max_time.is_finite() || max_time == 0.0 {
-            return Err(PlannerError::NumericalFailure);
-        }
+        utilities::validate_non_zero_finite_positive(max_time)
+            .map_err(|_| PlannerError::NumericalFailure)?;
 
         Ok(max_time)
     }

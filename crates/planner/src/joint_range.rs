@@ -8,9 +8,8 @@ pub struct JointRange {
 
 impl JointRange {
     pub fn new(min_angle: f64, max_angle: f64) -> Result<Self, PlannerError> {
-        if !min_angle.is_finite() || !max_angle.is_finite() {
-            return Err(PlannerError::AngleNonFinite);
-        }
+        utilities::validate_finite(min_angle).map_err(|_| PlannerError::AngleNonFinite)?;
+        utilities::validate_finite(max_angle).map_err(|_| PlannerError::AngleNonFinite)?;
 
         if min_angle > max_angle {
             return Err(PlannerError::MinGreaterThanMax);
@@ -23,9 +22,7 @@ impl JointRange {
     }
 
     pub fn contains(&self, angle: f64) -> Result<bool, PlannerError> {
-        if !angle.is_finite() {
-            return Err(PlannerError::AngleNonFinite);
-        }
+        utilities::validate_finite(angle).map_err(|_| PlannerError::AngleNonFinite)?;
 
         Ok((self.min_angle..=self.max_angle).contains(&angle))
     }

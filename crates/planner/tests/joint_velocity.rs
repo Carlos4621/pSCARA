@@ -396,7 +396,7 @@ fn successful_durations_are_finite_and_zero_only_for_stationary_movements() {
 }
 
 #[test]
-fn overflowing_angle_differences_return_angle_nonfinite_for_either_joint() {
+fn overflowing_finite_angle_differences_return_numerical_failure_for_either_joint() {
     for (start, end) in [
         (angles(-f64::MAX, 0.0), angles(f64::MAX, 0.0)),
         (angles(0.0, -f64::MAX), angles(0.0, f64::MAX)),
@@ -410,7 +410,7 @@ fn overflowing_angle_differences_return_angle_nonfinite_for_either_joint() {
             for (a, b) in [(start, end), (end, start)] {
                 assert_eq!(
                     velocities.min_duration_between(a, b),
-                    Err(PlannerError::AngleNonFinite)
+                    Err(PlannerError::NumericalFailure)
                 );
             }
         }
@@ -471,10 +471,11 @@ fn routing_via_an_intermediate_position_cannot_be_faster_than_the_direct_move() 
 #[test]
 fn duration_works_with_the_unwrapped_angles_of_a_validated_trajectory() {
     let robot = Scara::new(100.0, 60.0).unwrap();
-    let path = LineSegment {
-        start: Point::new(160.0, 0.0).unwrap(),
-        end: Point::new(100.0, 60.0).unwrap(),
-    };
+    let path = LineSegment::new(
+        Point::new(160.0, 0.0).unwrap(),
+        Point::new(100.0, 60.0).unwrap(),
+    )
+    .expect("test segment must have a finite length");
     for configuration in [ElbowConfiguration::Positive, ElbowConfiguration::Negative] {
         let samples: Vec<_> = JointTrajectory::new(&robot, &path, f64::MAX, configuration)
             .unwrap()

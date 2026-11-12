@@ -1,8 +1,4 @@
-use kinematics::{
-    ElbowConfiguration, JointAngles,
-    KinematicsError::{self},
-    Scara,
-};
+use kinematics::{ElbowConfiguration, JointAngles, Scara};
 use trajectory::{LineSegment, TrajectoryPoints};
 
 use crate::{JointLimits, PlannerError, ValidatedTrajectory};
@@ -33,8 +29,8 @@ impl<'a> JointTrajectory<'a> {
 
         if !scara
             .is_segment_reachable(
-                trajectory_points.get_segment().start,
-                trajectory_points.get_segment().end,
+                trajectory_points.get_segment().start(),
+                trajectory_points.get_segment().end(),
             )
             .map_err(PlannerError::Kinematics)?
         {
@@ -80,7 +76,7 @@ impl<'a> JointTrajectory<'a> {
 
         if !initial_position_point
             .is_close_to_point(
-                self.trajectory_points.get_segment().start,
+                self.trajectory_points.get_segment().start(),
                 max_point_distance_tolerance,
             )
             .map_err(PlannerError::Kinematics)?
@@ -91,7 +87,7 @@ impl<'a> JointTrajectory<'a> {
         let expected_angle = self
             .scara
             .inverse(
-                self.trajectory_points.get_segment().start,
+                self.trajectory_points.get_segment().start(),
                 self.configuration,
             )
             .map_err(PlannerError::Kinematics)?;
@@ -111,9 +107,8 @@ impl<'a> JointTrajectory<'a> {
     }
 
     pub fn with_max_joint_step(mut self, max_joint_step: f64) -> Result<Self, PlannerError> {
-        if !max_joint_step.is_finite() || max_joint_step <= 0.0 {
-            return Err(PlannerError::InvalidMaxJointStep);
-        }
+        utilities::validate_non_zero_finite_positive(max_joint_step)
+            .map_err(|_| PlannerError::InvalidMaxJointStep)?;
 
         self.max_joint_step = Some(max_joint_step);
 
@@ -159,12 +154,8 @@ impl<'a> JointTrajectory<'a> {
 
             let next_point_distance = self.max_point_distance / 2.0;
 
-            if !next_point_distance.is_finite()
-                || next_point_distance <= 0.0
-                || next_point_distance > self.max_point_distance
-            {
-                return Err(PlannerError::Kinematics(KinematicsError::NumericalFailure));
-            }
+            utilities::validate_non_zero_finite_positive(next_point_distance)
+                .map_err(|_| PlannerError::NumericalFailure)?;
 
             self.max_point_distance = next_point_distance;
 
@@ -179,15 +170,12 @@ impl<'a> JointTrajectory<'a> {
     }
 
     fn unwrap_angle(previous: f64, next: f64) -> Result<f64, PlannerError> {
-        if !previous.is_finite() || !next.is_finite() {
-            return Err(PlannerError::AngleNonFinite);
-        }
+        utilities::validate_finite(previous).map_err(|_| PlannerError::AngleNonFinite)?;
+        utilities::validate_finite(next).map_err(|_| PlannerError::AngleNonFinite)?;
 
         let result = previous + libm::atan2(libm::sin(next - previous), libm::cos(next - previous));
 
-        if !result.is_finite() {
-            return Err(PlannerError::AngleNonFinite);
-        }
+        utilities::validate_finite(result).map_err(|_| PlannerError::NumericalFailure)?;
 
         Ok(result)
     }

@@ -48,10 +48,11 @@ fn assert_error_preserves_state_and_finishes(
 #[test]
 fn regression_an_upstream_error_is_returned_once_after_a_valid_prefix() {
     let robot = Scara::new(100.0, 60.0).unwrap();
-    let path = LineSegment {
-        start: Point::new(160.0, 0.0).unwrap(),
-        end: Point::new(140.0, 0.0).unwrap(),
-    };
+    let path = LineSegment::new(
+        Point::new(160.0, 0.0).unwrap(),
+        Point::new(140.0, 0.0).unwrap(),
+    )
+    .expect("test segment must have a finite length");
     let limits = JointLimits::new(
         JointRange::new(0.0, 0.0).unwrap(),
         JointRange::new(0.0, 0.0).unwrap(),
@@ -103,16 +104,43 @@ fn regression_an_upstream_error_is_returned_once_after_a_valid_prefix() {
 }
 
 #[test]
+fn cartesian_precision_failure_preserves_the_last_committed_angle_and_time() {
+    let robot = Scara::new(1e16, 1e16).unwrap();
+    let path = LineSegment::new(
+        Point::new(1e16, 0.0).unwrap(),
+        Point::new(1e16 + 4.0, 0.0).unwrap(),
+    )
+    .unwrap();
+    let expected = PlannerError::Trajectory(trajectory::TrajectoryError::PrecissionLost);
+    for configuration in configurations() {
+        let source = JointTrajectory::new(&robot, &path, 1.0, configuration).unwrap();
+        assert_eq!(source.clone().validate(), Err(expected));
+        // Only this internal fixture can bypass the rejecting public validation.
+        let injected = ValidatedTrajectory::new(source);
+        let mut timed =
+            TimedJointTrajectory::new(injected, JointVelocityLimits::new(1.0, 1.0).unwrap());
+        assert_eq!(timed.clone().validate(), Err(expected));
+        assert_eq!(timed.clone().into_validated().unwrap_err(), expected);
+        for _ in 0..2 {
+            let sample = timed.next().unwrap().unwrap();
+            assert_eq!(sample.time_elapsed, 0.0);
+        }
+        assert_error_preserves_state_and_finishes(&mut timed, expected);
+    }
+}
+
+#[test]
 fn a_positive_duration_absorbed_by_the_clock_returns_precision_lost() {
     let robot = Scara::new(0.5, 0.5).unwrap();
-    let path = LineSegment {
-        start: Point::new(1.0, 0.0).unwrap(),
-        end: Point::new(1.0, f64::from_bits(1)).unwrap(),
-    };
+    let path = LineSegment::new(
+        Point::new(1.0, 0.0).unwrap(),
+        Point::new(1.0, f64::from_bits(1)).unwrap(),
+    )
+    .expect("test segment must have a finite length");
     for configuration in configurations() {
         let mut timed = timed(&robot, &path, 1.0, configuration);
         let first = timed.next().unwrap().unwrap();
-        let end = robot.inverse(path.end, configuration).unwrap();
+        let end = robot.inverse(path.end(), configuration).unwrap();
         let delta = timed
             .velocity_limits
             .min_duration_between(first.angle, end)
@@ -132,10 +160,11 @@ fn a_positive_duration_absorbed_by_the_clock_returns_precision_lost() {
 #[test]
 fn neighbouring_durations_around_half_an_ulp_are_classified_correctly() {
     let robot = Scara::new(0.5, 0.5).unwrap();
-    let path = LineSegment {
-        start: Point::new(1.0, 0.0).unwrap(),
-        end: Point::new(1.0, f64::EPSILON).unwrap(),
-    };
+    let path = LineSegment::new(
+        Point::new(1.0, 0.0).unwrap(),
+        Point::new(1.0, f64::EPSILON).unwrap(),
+    )
+    .expect("test segment must have a finite length");
     let below_two = f64::from_bits(2.0_f64.to_bits() - 1);
     let above_two = f64::from_bits(2.0_f64.to_bits() + 1);
     for configuration in configurations() {
@@ -147,7 +176,7 @@ fn neighbouring_durations_around_half_an_ulp_are_classified_correctly() {
         ] {
             let mut timed = timed(&robot, &path, speed, configuration);
             let first = timed.next().unwrap().unwrap();
-            let end = robot.inverse(path.end, configuration).unwrap();
+            let end = robot.inverse(path.end(), configuration).unwrap();
             assert_eq!(end.first_theta() - first.angle.first_theta(), f64::EPSILON);
             let delta = timed
                 .velocity_limits
@@ -175,14 +204,15 @@ fn neighbouring_durations_around_half_an_ulp_are_classified_correctly() {
 #[test]
 fn exact_half_ulp_ties_can_advance_an_odd_elapsed_clock() {
     let robot = Scara::new(0.5, 0.5).unwrap();
-    let path = LineSegment {
-        start: Point::new(1.0, 0.0).unwrap(),
-        end: Point::new(1.0, f64::EPSILON).unwrap(),
-    };
+    let path = LineSegment::new(
+        Point::new(1.0, 0.0).unwrap(),
+        Point::new(1.0, f64::EPSILON).unwrap(),
+    )
+    .expect("test segment must have a finite length");
     for configuration in configurations() {
         let mut timed = timed(&robot, &path, 2.0, configuration);
         let first = timed.next().unwrap().unwrap();
-        let end = robot.inverse(path.end, configuration).unwrap();
+        let end = robot.inverse(path.end(), configuration).unwrap();
         assert_eq!(
             timed.velocity_limits.min_duration_between(first.angle, end),
             Ok(f64::EPSILON / 2.0)
@@ -199,10 +229,8 @@ fn exact_half_ulp_ties_can_advance_an_odd_elapsed_clock() {
 #[test]
 fn zero_motion_keeps_a_nonzero_clock_and_is_not_precision_loss() {
     let robot = Scara::new(0.5, 0.5).unwrap();
-    let path = LineSegment {
-        start: Point::new(1.0, 0.0).unwrap(),
-        end: Point::new(1.0, 0.0).unwrap(),
-    };
+    let path = LineSegment::new(Point::new(1.0, 0.0).unwrap(), Point::new(1.0, 0.0).unwrap())
+        .expect("test segment must have a finite length");
     for configuration in configurations() {
         for elapsed in [f64::from_bits(1), f64::MIN_POSITIVE, 1.0, f64::MAX] {
             let mut timed = timed(&robot, &path, 1.0, configuration);
@@ -221,10 +249,11 @@ fn zero_motion_keeps_a_nonzero_clock_and_is_not_precision_loss() {
 #[test]
 fn timing_failures_preserve_the_committed_state_and_stop_before_later_samples() {
     let robot = Scara::new(100.0, 60.0).unwrap();
-    let path = LineSegment {
-        start: Point::new(160.0, 0.0).unwrap(),
-        end: Point::new(140.0, 0.0).unwrap(),
-    };
+    let path = LineSegment::new(
+        Point::new(160.0, 0.0).unwrap(),
+        Point::new(140.0, 0.0).unwrap(),
+    )
+    .expect("test segment must have a finite length");
     for configuration in configurations() {
         for (speed, expected) in [
             (1.0, PlannerError::TimeElapsedPrecisionLost),

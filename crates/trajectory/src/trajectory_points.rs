@@ -59,7 +59,7 @@ impl Iterator for TrajectoryPoints<'_> {
                     }
 
                     Ok(point)
-                },
+                }
                 None => Ok(point),
             };
 

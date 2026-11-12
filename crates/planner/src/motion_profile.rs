@@ -1,9 +1,12 @@
-use crate::PlannerError;
+use crate::{
+    PlannerError,
+    profile_math::{product_ratio, sqrt_product_ratio},
+};
 
 enum MotionPhase {
-    Acceletration,
+    Acceleration,
     Cruise,
-    Desacceleration,
+    Deceleration,
 }
 
 #[derive(Debug)]
@@ -15,7 +18,6 @@ pub struct MotionProfile {
     peak_velocity: f64,
     max_acceleration: f64,
     acceleration_time: f64,
-    cruise_time: f64,
     total_time: f64,
 }
 
@@ -26,56 +28,40 @@ impl MotionProfile {
         max_acceleration: f64,
         max_velocity: f64,
     ) -> Result<Self, PlannerError> {
-        if !start_angle.is_finite() || !end_angle.is_finite() {
-            return Err(PlannerError::AngleNonFinite);
-        }
+        utilities::validate_finite(start_angle).map_err(|_| PlannerError::AngleNonFinite)?;
+        utilities::validate_finite(end_angle).map_err(|_| PlannerError::AngleNonFinite)?;
 
-        if !max_acceleration.is_finite() || max_acceleration <= 0.0 {
-            return Err(PlannerError::InvalidMaxAcceleration);
-        }
+        utilities::validate_non_zero_finite_positive(max_acceleration)
+            .map_err(|_| PlannerError::InvalidMaxAcceleration)?;
+        utilities::validate_non_zero_finite_positive(max_velocity)
+            .map_err(|_| PlannerError::InvalidMaxVelocity)?;
 
-        if !max_velocity.is_finite() || max_velocity <= 0.0 {
-            return Err(PlannerError::InvalidMaxVelocity);
-        }
+        let delta = end_angle - start_angle;
+        utilities::validate_finite(delta).map_err(|_| PlannerError::NumericalFailure)?;
+        let angular_displacement = delta.abs();
+        let displacement_direction = delta.signum();
 
-        let critic_distance = max_velocity * max_velocity / max_acceleration;
-        let angular_displacement = (end_angle - start_angle).abs();
-        let displacement_direction = (end_angle - start_angle).signum();
-
-        let is_triangular = angular_displacement < critic_distance;
-
-        let peak_velocity = if is_triangular {
-            libm::sqrt(max_acceleration * angular_displacement)
+        let (peak_velocity, acceleration_time, total_time) = if angular_displacement == 0.0 {
+            (0.0, 0.0, 0.0)
         } else {
-            max_velocity
+            let unconstrained_peak =
+                sqrt_product_ratio(&[max_acceleration, angular_displacement], &[]);
+            let triangular = unconstrained_peak <= max_velocity;
+            let peak = unconstrained_peak.min(max_velocity);
+            let ramp = if triangular {
+                sqrt_product_ratio(&[angular_displacement], &[max_acceleration])
+            } else {
+                max_velocity / max_acceleration
+            };
+            let duration = if triangular {
+                2.0 * ramp
+            } else {
+                angular_displacement / max_velocity + ramp
+            };
+            utilities::validate_non_zero_finite_positive(duration)
+                .map_err(|_| PlannerError::NumericalFailure)?;
+            (peak, ramp, duration)
         };
-
-        if !peak_velocity.is_finite() {
-            return Err(PlannerError::NumericalFailure);
-        }
-
-        let acceleration_time = peak_velocity / max_acceleration;
-
-        if !acceleration_time.is_finite() {
-            return Err(PlannerError::NumericalFailure);
-        }
-
-        let cruise_time = if angular_displacement == 0.0 || is_triangular {
-            0.0
-        } else {
-            (angular_displacement - peak_velocity * peak_velocity / max_acceleration)
-                / peak_velocity
-        };
-
-        if !cruise_time.is_finite() {
-            return Err(PlannerError::NumericalFailure);
-        }
-
-        let total_time = 2.0 * acceleration_time + cruise_time;
-
-        if !total_time.is_finite() {
-            return Err(PlannerError::NumericalFailure);
-        }
 
         Ok(Self {
             start_angle,
@@ -85,7 +71,6 @@ impl MotionProfile {
             peak_velocity,
             max_acceleration,
             acceleration_time,
-            cruise_time,
             total_time,
         })
     }
@@ -95,75 +80,155 @@ impl MotionProfile {
     }
 
     pub fn position_at(&self, time: f64) -> Result<f64, PlannerError> {
-        self.validate_time(time)?;
+        self.position_at_scaled(time, self.total_time)
+    }
 
-        if time == self.total_time {
+    pub(crate) fn position_at_scaled(&self, time: f64, duration: f64) -> Result<f64, PlannerError> {
+        Self::validate_duration_time(time, duration)?;
+
+        if time == duration {
             return Ok(self.end_angle);
         }
+        if time == 0.0 || self.angular_displacement == 0.0 {
+            return Ok(self.start_angle);
+        }
 
-        let angle = match self.get_phase_on(time) {
-            MotionPhase::Acceletration => self.position_on_acceleration_phase(time),
-            MotionPhase::Cruise => self.position_on_cruise_phase(time),
-            MotionPhase::Desacceleration => self.position_on_desacceleration_phase(time),
+        let angle = match self.phase_at(time, duration) {
+            MotionPhase::Acceleration => self.ramp_displacement(time, duration),
+            MotionPhase::Cruise => {
+                let ramp_distance = self.ramp_displacement(self.acceleration_time, self.total_time);
+                ramp_distance
+                    + product_ratio(
+                        &[
+                            self.peak_velocity,
+                            time - self.scaled_ramp_time(duration),
+                            self.total_time,
+                        ],
+                        &[duration],
+                    )
+            }
+            MotionPhase::Deceleration => {
+                self.angular_displacement - self.ramp_displacement(duration - time, duration)
+            }
         };
 
-        Ok(self.start_angle + self.displacement_direction * angle)
+        let result = self.start_angle
+            + self.displacement_direction * angle.clamp(0.0, self.angular_displacement);
+
+        utilities::validate_finite(result).map_err(|_| PlannerError::NumericalFailure)?;
+
+        Ok(result)
     }
 
     pub fn velocity_at(&self, time: f64) -> Result<f64, PlannerError> {
-        self.validate_time(time)?;
+        self.velocity_at_scaled(time, self.total_time)
+    }
 
-        if time == self.total_time {
+    pub(crate) fn velocity_at_scaled(&self, time: f64, duration: f64) -> Result<f64, PlannerError> {
+        Self::validate_duration_time(time, duration)?;
+
+        if time == 0.0 || time == duration || self.angular_displacement == 0.0 {
             return Ok(0.0);
         }
 
-        let velocity_magnitude = match self.get_phase_on(time) {
-            MotionPhase::Acceletration => self.velocity_on_acceleration_phase(time),
-            MotionPhase::Cruise => self.peak_velocity,
-            MotionPhase::Desacceleration => self.velocity_on_desacceleration_phase(time),
+        // Synchronization only stretches time, so rounding must not raise a limit.
+        let peak = product_ratio(&[self.peak_velocity, self.total_time], &[duration])
+            .min(self.peak_velocity);
+        let velocity_magnitude = match self.phase_at(time, duration) {
+            MotionPhase::Acceleration => self.ramp_velocity(time, duration),
+            MotionPhase::Cruise => peak,
+            MotionPhase::Deceleration => self.ramp_velocity(duration - time, duration),
         };
 
-        Ok(velocity_magnitude * self.displacement_direction)
+        let result = velocity_magnitude.min(peak) * self.displacement_direction;
+
+        utilities::validate_finite(result).map_err(|_| PlannerError::NumericalFailure)?;
+
+        Ok(result)
+    }
+
+    pub fn acceleration_at(&self, time: f64) -> Result<f64, PlannerError> {
+        self.acceleration_at_scaled(time, self.total_time)
+    }
+
+    pub(crate) fn acceleration_at_scaled(
+        &self,
+        time: f64,
+        duration: f64,
+    ) -> Result<f64, PlannerError> {
+        Self::validate_duration_time(time, duration)?;
+
+        if self.start_angle == self.end_angle {
+            return Ok(0.0);
+        }
+
+        let acceleration = product_ratio(
+            &[self.max_acceleration, self.total_time, self.total_time],
+            &[duration, duration],
+        )
+        .min(self.max_acceleration);
+        Ok(match self.phase_at(time, duration) {
+            MotionPhase::Acceleration => self.displacement_direction * acceleration,
+            MotionPhase::Cruise => 0.0,
+            MotionPhase::Deceleration => -self.displacement_direction * acceleration,
+        })
     }
 
     pub fn validate_time(&self, time: f64) -> Result<(), PlannerError> {
-        if !time.is_finite() || time < 0.0 || time > self.total_time {
+        Self::validate_duration_time(time, self.total_time)
+    }
+
+    fn validate_duration_time(time: f64, duration: f64) -> Result<(), PlannerError> {
+        utilities::validate_finite_positive(time).map_err(|_| PlannerError::InvalidTime)?;
+
+        if time > duration {
             return Err(PlannerError::InvalidTime);
         }
 
         Ok(())
     }
 
-    fn get_phase_on(&self, time: f64) -> MotionPhase {
-        if 0.0 <= time && time <= self.acceleration_time {
-            return MotionPhase::Acceletration;
-        }
+    fn scaled_ramp_time(&self, duration: f64) -> f64 {
+        product_ratio(&[self.acceleration_time, duration], &[self.total_time])
+    }
 
-        if self.acceleration_time < time && time <= self.acceleration_time + self.cruise_time {
+    fn phase_at(&self, time: f64, duration: f64) -> MotionPhase {
+        if time == duration {
+            return MotionPhase::Deceleration;
+        }
+        let ramp = self.scaled_ramp_time(duration);
+        if time <= ramp {
+            return MotionPhase::Acceleration;
+        }
+        if time <= duration - ramp {
             return MotionPhase::Cruise;
         }
 
-        MotionPhase::Desacceleration
+        MotionPhase::Deceleration
     }
 
-    fn position_on_acceleration_phase(&self, time: f64) -> f64 {
-        self.max_acceleration * time * time / 2.0
+    fn ramp_displacement(&self, time: f64, duration: f64) -> f64 {
+        product_ratio(
+            &[
+                self.max_acceleration,
+                time,
+                time,
+                self.total_time,
+                self.total_time,
+            ],
+            &[2.0, duration, duration],
+        )
     }
 
-    fn position_on_cruise_phase(&self, time: f64) -> f64 {
-        self.position_on_acceleration_phase(self.acceleration_time)
-            + self.peak_velocity * (time - self.acceleration_time)
-    }
-
-    fn position_on_desacceleration_phase(&self, time: f64) -> f64 {
-        self.angular_displacement - self.position_on_acceleration_phase(self.total_time - time)
-    }
-
-    fn velocity_on_acceleration_phase(&self, time: f64) -> f64 {
-        self.max_acceleration * time
-    }
-
-    fn velocity_on_desacceleration_phase(&self, time: f64) -> f64 {
-        self.velocity_on_acceleration_phase(self.total_time - time)
+    fn ramp_velocity(&self, time: f64, duration: f64) -> f64 {
+        product_ratio(
+            &[
+                self.max_acceleration,
+                time,
+                self.total_time,
+                self.total_time,
+            ],
+            &[duration, duration],
+        )
     }
 }

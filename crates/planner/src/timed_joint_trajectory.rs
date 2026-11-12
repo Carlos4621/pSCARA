@@ -77,9 +77,7 @@ impl Iterator for TimedJointTrajectory<'_> {
 
             let new_time = self.time_elapsed + delta_time;
 
-            if !new_time.is_finite() {
-                return Err(PlannerError::TimeElapsedOverflow);
-            }
+            utilities::validate_finite(new_time).map_err(|_| PlannerError::TimeElapsedOverflow)?;
 
             if delta_time > 0.0 && new_time <= self.time_elapsed {
                 return Err(PlannerError::TimeElapsedPrecisionLost);

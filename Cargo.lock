@@ -23,6 +23,7 @@ dependencies = [
  "kinematics",
  "libm",
  "trajectory",
+ "utilities",
 ]
 
 [[package]]

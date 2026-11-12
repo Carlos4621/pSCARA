@@ -81,14 +81,10 @@ fn unwrap_angle_preserves_equal_extreme_and_subnormal_values() {
 }
 
 #[test]
-fn unwrap_angle_rejects_every_non_finite_operand() {
+fn unwrap_angle_rejects_every_non_finite_previous_operand() {
     for invalid in [f64::NEG_INFINITY, f64::INFINITY, f64::NAN, -f64::NAN] {
         assert_eq!(
             JointTrajectory::unwrap_angle(invalid, 0.0),
-            Err(PlannerError::AngleNonFinite)
-        );
-        assert_eq!(
-            JointTrajectory::unwrap_angle(0.0, invalid),
             Err(PlannerError::AngleNonFinite)
         );
         assert_eq!(
@@ -99,11 +95,21 @@ fn unwrap_angle_rejects_every_non_finite_operand() {
 }
 
 #[test]
+fn unwrap_angle_rejects_every_non_finite_next_operand() {
+    for invalid in [f64::NEG_INFINITY, f64::INFINITY, f64::NAN, -f64::NAN] {
+        assert_eq!(
+            JointTrajectory::unwrap_angle(0.0, invalid),
+            Err(PlannerError::AngleNonFinite)
+        );
+    }
+}
+
+#[test]
 fn unwrap_angle_rejects_a_non_finite_difference_between_finite_operands() {
     for (actual, next) in [(f64::MAX, -f64::MAX), (-f64::MAX, f64::MAX)] {
         assert_eq!(
             JointTrajectory::unwrap_angle(actual, next),
-            Err(PlannerError::AngleNonFinite)
+            Err(PlannerError::NumericalFailure)
         );
     }
 }

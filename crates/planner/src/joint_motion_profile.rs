@@ -40,54 +40,31 @@ impl JointMotionProfile {
     }
 
     pub fn position_at(&self, time: f64) -> Result<JointAngles, PlannerError> {
-        if !time.is_finite() || time > self.total_time || time < 0.0 {
-            return Err(PlannerError::InvalidTime);
-        }
-
-        // Garantizamos final exacto
-        if time == self.total_time {
-            return JointAngles::new(
-                self.first_profile
-                    .position_at(self.first_profile.total_time())?,
-                self.second_profile
-                    .position_at(self.second_profile.total_time())?,
-            )
-            .map_err(PlannerError::Kinematics);
-        }
-
-        let progress = time / self.total_time;
-
-        let first_time = progress * self.first_profile.total_time();
-        let second_time = progress * self.second_profile.total_time();
-
-        let first_theta = self.first_profile.position_at(first_time)?;
-        let second_theta = self.second_profile.position_at(second_time)?;
-
-        JointAngles::new(first_theta, second_theta).map_err(PlannerError::Kinematics)
+        JointAngles::new(
+            self.first_profile
+                .position_at_scaled(time, self.total_time)?,
+            self.second_profile
+                .position_at_scaled(time, self.total_time)?,
+        )
+        .map_err(PlannerError::Kinematics)
     }
 
     pub fn velocity_at(&self, time: f64) -> Result<(f64, f64), PlannerError> {
-        if !time.is_finite() || time < 0.0 || time > self.total_time {
-            return Err(PlannerError::InvalidTime);
-        }
+        Ok((
+            self.first_profile
+                .velocity_at_scaled(time, self.total_time)?,
+            self.second_profile
+                .velocity_at_scaled(time, self.total_time)?,
+        ))
+    }
 
-        // Ninguna articulación necesita moverse.
-        if self.total_time == 0.0 {
-            return Ok((0.0, 0.0));
-        }
-
-        let progress = time / self.total_time;
-
-        let first_factor = self.first_profile.total_time() / self.total_time;
-        let second_factor = self.second_profile.total_time() / self.total_time;
-
-        let first_time = progress * self.first_profile.total_time();
-        let second_time = progress * self.second_profile.total_time();
-
-        let first_velocity = self.first_profile.velocity_at(first_time)? * first_factor;
-        let second_velocity = self.second_profile.velocity_at(second_time)? * second_factor;
-
-        Ok((first_velocity, second_velocity))
+    pub fn acceleration_at(&self, time: f64) -> Result<(f64, f64), PlannerError> {
+        Ok((
+            self.first_profile
+                .acceleration_at_scaled(time, self.total_time)?,
+            self.second_profile
+                .acceleration_at_scaled(time, self.total_time)?,
+        ))
     }
 
     pub fn total_time(&self) -> f64 {

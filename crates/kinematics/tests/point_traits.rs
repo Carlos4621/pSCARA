@@ -1,5 +1,4 @@
 use kinematics::{KinematicsError, Point};
-use utilities::UtilitiesErrors;
 
 fn point(x: f64, y: f64) -> Point {
     Point::new(x, y).expect("test point should be finite")
@@ -69,10 +68,7 @@ fn add_and_sub_reject_non_finite_results() {
         point(f64::MAX, 0.0) - point(-f64::MAX, 0.0),
         point(0.0, -f64::MAX) - point(0.0, f64::MAX),
     ] {
-        assert_eq!(
-            result,
-            Err(KinematicsError::Utilities(UtilitiesErrors::NonFiniteF64))
-        );
+        assert_eq!(result, Err(KinematicsError::InvalidPoint));
     }
 }
 
@@ -114,10 +110,7 @@ fn dot_product_reports_non_finite_intermediate_or_final_results() {
         point(f64::MAX, f64::MAX) * point(1.0, 1.0),
         point(f64::MAX, f64::MAX) * point(f64::MAX, -f64::MAX),
     ] {
-        assert_eq!(
-            result,
-            Err(KinematicsError::Utilities(UtilitiesErrors::NonFiniteF64))
-        );
+        assert_eq!(result, Err(KinematicsError::NumericalFailure));
     }
 }
 

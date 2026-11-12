@@ -23,4 +23,8 @@ pub enum PlannerError {
     InvalidMaxVelocity,
     InvalidMaxAcceleration,
     InvalidTime,
+    InvalidInitialSpeed,
+    InvalidFinalSpeed,
+    InvalidBoundarySpeed,
+    InfeasibleMotion,
 }

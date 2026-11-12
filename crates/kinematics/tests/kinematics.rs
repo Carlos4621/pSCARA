@@ -1,5 +1,4 @@
 use kinematics::{ElbowConfiguration, JointAngles, KinematicsError, Point, Scara};
-use utilities::UtilitiesErrors;
 
 #[cfg(test)]
 mod tests {
@@ -42,7 +41,7 @@ mod tests {
             for (x, y) in [(invalid, 0.0), (0.0, invalid), (invalid, invalid)] {
                 assert!(matches!(
                     Point::new(x, y),
-                    Err(KinematicsError::Utilities(UtilitiesErrors::NonFiniteF64))
+                    Err(KinematicsError::InvalidPoint)
                 ));
             }
         }
@@ -69,7 +68,7 @@ mod tests {
             {
                 assert!(matches!(
                     JointAngles::new(first_theta, second_theta),
-                    Err(KinematicsError::Utilities(UtilitiesErrors::NonFiniteF64))
+                    Err(KinematicsError::InvalidPoint)
                 ));
             }
         }
@@ -298,23 +297,69 @@ mod tests {
     }
 
     #[test]
-    fn utilities_errors_convert_without_losing_the_original_variant() {
-        fn propagate(error: UtilitiesErrors) -> Result<(), KinematicsError> {
-            Err(error)?;
-            Ok(())
-        }
-        for error in [
-            UtilitiesErrors::NonFiniteF64,
-            UtilitiesErrors::NonPositiveF64,
-            UtilitiesErrors::NonNegativeF64,
-            UtilitiesErrors::NonZeroFiniteF64,
-            UtilitiesErrors::NonZeroFinitePositiveF64,
+    fn validation_and_arithmetic_errors_are_specific_to_the_public_operation() {
+        let origin = point(0.0, 0.0);
+        let maximum = point(f64::MAX, 0.0);
+        for (operation, result, expected) in [
+            (
+                "point constructor",
+                Point::new(f64::NAN, 0.0).map(|_| ()),
+                KinematicsError::InvalidPoint,
+            ),
+            (
+                "joint constructor",
+                JointAngles::new(0.0, f64::INFINITY).map(|_| ()),
+                KinematicsError::InvalidPoint,
+            ),
+            (
+                "arm length",
+                Scara::new(0.0, 1.0).map(|_| ()),
+                KinematicsError::InvalidArmLength,
+            ),
+            (
+                "point tolerance",
+                origin.is_close_to_point(origin, f64::NAN).map(|_| ()),
+                KinematicsError::InvalidTolerance,
+            ),
+            (
+                "joint tolerance",
+                angles(0.0, 0.0)
+                    .is_close_to_joint(angles(0.0, 0.0), -1.0)
+                    .map(|_| ()),
+                KinematicsError::InvalidTolerance,
+            ),
+            (
+                "scale input",
+                maximum.scale(f64::INFINITY).map(|_| ()),
+                KinematicsError::InvalidScale,
+            ),
+            (
+                "scale result",
+                maximum.scale(2.0).map(|_| ()),
+                KinematicsError::NumericalFailure,
+            ),
+            (
+                "addition result",
+                (maximum + maximum).map(|_| ()),
+                KinematicsError::InvalidPoint,
+            ),
+            (
+                "subtraction result",
+                (maximum - (-maximum)).map(|_| ()),
+                KinematicsError::InvalidPoint,
+            ),
+            (
+                "dot product",
+                (maximum * point(2.0, 0.0)).map(|_| ()),
+                KinematicsError::NumericalFailure,
+            ),
+            (
+                "distance",
+                maximum.distance_to_point(-maximum).map(|_| ()),
+                KinematicsError::NumericalFailure,
+            ),
         ] {
-            assert_eq!(
-                KinematicsError::from(error),
-                KinematicsError::Utilities(error)
-            );
-            assert_eq!(propagate(error), Err(KinematicsError::Utilities(error)));
+            assert_eq!(result, Err(expected), "operation: {operation}");
         }
     }
 
@@ -324,13 +369,10 @@ mod tests {
             for payload in [1, 2, 1_u64 << 51, (1_u64 << 52) - 1] {
                 let nan = f64::from_bits(sign | (0x7ff_u64 << 52) | payload);
                 for (x, y) in [(nan, 0.0), (0.0, nan)] {
-                    assert_eq!(
-                        Point::new(x, y),
-                        Err(KinematicsError::Utilities(UtilitiesErrors::NonFiniteF64))
-                    );
+                    assert_eq!(Point::new(x, y), Err(KinematicsError::InvalidPoint));
                     assert!(matches!(
                         JointAngles::new(x, y),
-                        Err(KinematicsError::Utilities(UtilitiesErrors::NonFiniteF64))
+                        Err(KinematicsError::InvalidPoint)
                     ));
                 }
             }

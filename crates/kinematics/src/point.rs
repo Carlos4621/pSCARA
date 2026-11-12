@@ -10,8 +10,8 @@ pub struct Point {
 
 impl Point {
     pub fn new(x: f64, y: f64) -> Result<Self, KinematicsError> {
-        utilities::validate_finite(x)?;
-        utilities::validate_finite(y)?;
+        utilities::validate_finite(x).map_err(|_| KinematicsError::InvalidPoint)?;
+        utilities::validate_finite(y).map_err(|_| KinematicsError::InvalidPoint)?;
 
         Ok(Self { x, y })
     }
@@ -84,7 +84,7 @@ impl Mul for Point {
     fn mul(self, rhs: Self) -> Self::Output {
         let result = self.x * rhs.x + self.y * rhs.y;
 
-        utilities::validate_finite(result)?;
+        utilities::validate_finite(result).map_err(|_| KinematicsError::NumericalFailure)?;
 
         Ok(result)
     }

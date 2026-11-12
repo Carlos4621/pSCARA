@@ -1,63 +1,38 @@
 #![no_std]
 
-//! Números `f64` finitos con validación de signo y operaciones comprobadas.
+//! Validación de valores `f64` sin depender de `std` ni asignar memoria.
 //!
-//! Este crate no requiere `std` ni asignaciones de memoria. Sus tipos mantienen
-//! sus invariantes mediante campos privados y constructores que devuelven
-//! [`Result`].
+//! Las funciones devuelven `Ok(())` cuando la entrada satisface la condición,
+//! o un [`UtilitiesErrors`] que indica el motivo del rechazo. No convierten
+//! ni almacenan el número, y no validan automáticamente operaciones posteriores.
 //!
-//! | Tipo | Valores admitidos |
-//! | --- | --- |
-//! | [`FiniteF64`] | Cualquier `f64` finito |
-//! | [`FinitePositiveF64`] | Valores finitos mayores o iguales a cero |
-//! | [`FiniteNegativeF64`] | Valores finitos menores o iguales a cero |
-//!
-//! Los tres tipos admiten `+0.0` y `-0.0`, conservando su representación.
-//! La igualdad y el orden siguen las comparaciones numéricas de `f64`:
-//! ambos ceros son iguales aunque sus bits sean distintos.
-//!
-//! # Aritmética y errores
-//!
-//! Las operaciones usan el redondeo de `f64`. Las operaciones binarias devuelven
-//! `Result`: un resultado infinito o NaN produce [`UtilitiesErrors::NonFiniteF64`].
-//! Esto incluye la división entre cero. El subdesbordamiento a un subnormal o
-//! a cero es válido; estos tipos garantizan finitud, no aritmética exacta.
+//! [`validate_finite`] admite cualquier valor finito. Los dominios de
+//! [`validate_finite_positive`] y [`validate_finite_negativo`] son inclusivos:
+//! admiten, respectivamente, valores mayores o iguales a cero y menores o
+//! iguales a cero. Ambos ceros con signo son válidos en estos tres validadores.
+//! La finitud se comprueba antes que el signo.
 //!
 //! ```
-//! use utilities::{FiniteF64, FinitePositiveF64, UtilitiesErrors};
+//! use utilities::{validate_finite, validate_finite_positive, validate_finite_negativo, UtilitiesErrors};
 //!
-//! fn sumar(a: f64, b: f64) -> Result<FiniteF64, UtilitiesErrors> {
-//!     let a = FiniteF64::try_from(a)?;
-//!     let b: FiniteF64 = b.try_into()?;
-//!     a + b
+//! fn sumar(a: f64, b: f64) -> Result<f64, UtilitiesErrors> {
+//!     validate_finite(a)?;
+//!     validate_finite(b)?;
+//!     let result = a + b;
+//!     validate_finite(result)?;
+//!     Ok(result)
 //! }
 //!
-//! assert_eq!(sumar(1.5, 2.25)?.get_value(), 3.75);
+//! assert_eq!(sumar(1.5, 2.25)?, 3.75);
 //! assert_eq!(sumar(f64::MAX, f64::MAX), Err(UtilitiesErrors::NonFiniteF64));
-//!
-//! let positivo = FinitePositiveF64::try_from(2.5)?;
-//! let general: FiniteF64 = positivo.into();
-//! let original: f64 = general.into();
-//! assert_eq!(original, 2.5);
+//! assert_eq!(validate_finite_positive(-0.0), Ok(()));
+//! assert_eq!(validate_finite_negativo(0.0), Ok(()));
+//! assert_eq!(validate_finite_positive(-1.0), Err(UtilitiesErrors::NonPositiveF64));
 //! # Ok::<(), UtilitiesErrors>(())
 //! ```
-//!
-//! # Conversiones
-//!
-//! [`TryFrom<f64>`] y [`TryInto`] validan la entrada mediante los constructores.
-//! [`From`] e [`Into`] permiten extraer un `f64` de cualquiera de los tres tipos
-//! o convertir un tipo con signo en [`FiniteF64`] sin perder bits.
-//! Para restringir el signo de un [`FiniteF64`], utiliza
-//! [`FiniteF64::to_finite_positive`] o [`FiniteF64::to_finite_negative`].
 
-mod finite_f64;
-pub use finite_f64::FiniteF64;
-
-mod finite_positive_f64;
-pub use finite_positive_f64::FinitePositiveF64;
+mod numerics;
+pub use numerics::*;
 
 mod utilities_errors;
 pub use utilities_errors::UtilitiesErrors;
-
-mod finite_negative_f64;
-pub use finite_negative_f64::FiniteNegativeF64;

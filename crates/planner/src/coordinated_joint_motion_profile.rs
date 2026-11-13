@@ -62,6 +62,14 @@ impl CoordinatedJointMotionProfile {
     pub fn position_at(&self, time: f64) -> Result<JointAngles, PlannerError> {
         utilities::validate_finite_positive(time).map_err(|_| PlannerError::InvalidTime)?;
 
+        if time == 0.0 {
+            return Ok(self.start);
+        }
+
+        if time == self.progress_profile.total_time() {
+            return Ok(self.end);
+        }
+
         let progress = self.progress_profile.position_at(time)?;
 
         let first_theta = self.start.first_theta() + progress * self.first_displacement;

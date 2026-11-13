@@ -174,6 +174,53 @@ fn equal_progress_speeds_do_not_match_joint_velocities_for_unequal_lengths() {
 }
 
 #[test]
+fn scaled_progress_speeds_preserve_continuity_and_limits_for_unequal_segments() {
+    let (a, b, c) = (angles([0.0, 0.0]), angles([2.0, -1.0]), angles([6.0, -3.0]));
+    // Exercise both triangular and trapezoidal profiles with feasible limits.
+    for (velocity, acceleration) in [([20.0; 2], [40.0; 2]), ([4.0, 3.0], [40.0, 30.0])] {
+        let velocity_limits = JointVelocityLimits::new(velocity[0], velocity[1]).unwrap();
+        let acceleration_limits =
+            JointAccelerationLimits::new(acceleration[0], acceleration[1]).unwrap();
+        let first = CoordinatedJointMotionProfile::new(
+            a,
+            b,
+            &velocity_limits,
+            &acceleration_limits,
+            0.0,
+            0.5,
+        )
+        .unwrap();
+        let second = CoordinatedJointMotionProfile::new(
+            b,
+            c,
+            &velocity_limits,
+            &acceleration_limits,
+            0.25,
+            0.0,
+        )
+        .unwrap();
+
+        let first_velocity = first.velocity_at(first.total_time()).unwrap();
+        let second_velocity = second.velocity_at(0.0).unwrap();
+        assert_eq!(first_velocity, second_velocity);
+        assert_eq!(first_velocity, (1.0, -0.5));
+        assert_eq!(second_velocity, (1.0, -0.5));
+
+        let first_end = position(&first, first.total_time());
+        let second_start = position(&second, 0.0);
+        assert_eq!(first_end, second_start);
+        assert_eq!(first_end, [2.0, -1.0]);
+        assert_eq!(position(&first, 0.0), [0.0, 0.0]);
+        assert_eq!(position(&second, second.total_time()), [6.0, -3.0]);
+        assert_eq!(first.velocity_at(0.0), Ok((0.0, 0.0)));
+        assert_eq!(second.velocity_at(second.total_time()), Ok((0.0, 0.0)));
+
+        assert_physical_limits(&first, [2.0, -1.0], velocity, acceleration, 0.0, 0.5);
+        assert_physical_limits(&second, [4.0, -2.0], velocity, acceleration, 0.25, 0.0);
+    }
+}
+
+#[test]
 fn equal_progress_speeds_do_not_match_joint_velocities_at_a_corner() {
     let (first, second) = chain(CHAINS[3], [20.0; 2], [40.0; 2]);
     let first_end = first.velocity_at(first.total_time()).unwrap();

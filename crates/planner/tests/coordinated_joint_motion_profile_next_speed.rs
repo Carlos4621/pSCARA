@@ -105,7 +105,7 @@ fn a_degenerate_segment_returns_zero_next_progress_speed() {
 }
 
 #[test]
-fn the_current_input_contract_requires_a_positive_finite_final_speed() {
+fn negative_or_nonfinite_final_speeds_are_rejected() {
     for invalid in [
         -1.0,
         -f64::from_bits(1),
@@ -124,6 +124,53 @@ fn the_current_input_contract_requires_a_positive_finite_final_speed() {
 }
 
 #[test]
+fn both_signed_zero_final_speeds_are_valid_for_parallel_segments() {
+    for speed in [0.0, -0.0] {
+        for (a, b, c) in [
+            ([0.0, 0.0], [2.0, -1.0], [6.0, -3.0]),
+            ([3.0, 0.0], [3.0, 1.0], [3.0, 3.0]),
+            ([0.0, 3.0], [1.0, 3.0], [3.0, 3.0]),
+            ([6.0, -3.0], [2.0, -1.0], [0.0, 0.0]),
+        ] {
+            assert_eq!(next_speed(a, b, c, speed), Ok(0.0));
+        }
+    }
+}
+
+#[test]
+fn zero_final_speed_stays_valid_even_when_the_displacement_ratio_is_unrepresentable() {
+    let tiny = f64::from_bits(1);
+    let large = f64::MAX;
+    for speed in [0.0, -0.0] {
+        for (first_delta, second_delta) in [(tiny, large), (large, tiny)] {
+            for (a, c) in [
+                ([-first_delta; 2], [second_delta; 2]),
+                ([0.0, -first_delta], [0.0, second_delta]),
+                ([-first_delta, 0.0], [second_delta, 0.0]),
+            ] {
+                assert_eq!(next_speed(a, [0.0; 2], c, speed), Ok(0.0));
+            }
+        }
+    }
+}
+
+#[test]
+fn a_required_stop_stays_valid_for_zero_or_positive_requested_speed() {
+    for speed in [0.0, -0.0, f64::from_bits(1), 0.5, f64::MAX] {
+        for (a, b, c) in [
+            ([0.0, 0.0], [2.0, -1.0], [4.0, 0.0]),
+            ([0.0, 0.0], [2.0, -1.0], [0.0, 0.0]),
+            ([0.0; 2], [0.0; 2], [1.0; 2]),
+            ([0.0; 2], [1.0; 2], [1.0; 2]),
+        ] {
+            // This is the intentional stop shortcut, not numeric underflow
+            // while scaling two parallel segments with a positive speed.
+            assert_eq!(next_speed(a, b, c, speed), Ok(0.0));
+        }
+    }
+}
+
+#[test]
 fn displacement_overflow_propagates_from_either_segment_or_joint() {
     let large = f64::MAX;
     for (a, b, c) in [
@@ -132,10 +179,12 @@ fn displacement_overflow_propagates_from_either_segment_or_joint() {
         ([large, 0.0], [large, 1.0], [-large, 2.0]),
         ([0.0, large], [1.0, large], [2.0, -large]),
     ] {
-        assert_eq!(
-            next_speed(a, b, c, 0.5),
-            Err(PlannerError::NumericalFailure)
-        );
+        for speed in [0.0, -0.0, 0.5] {
+            assert_eq!(
+                next_speed(a, b, c, speed),
+                Err(PlannerError::NumericalFailure)
+            );
+        }
     }
 }
 
@@ -144,10 +193,85 @@ fn unrepresentable_positive_speed_does_not_silently_turn_into_a_stop() {
     let tiny = f64::from_bits(1);
     // The first physical velocity is (tiny,tiny). Returning zero for the next
     // progress speed would make its physical velocity (0,0), breaking continuity.
-    assert_eq!(
-        next_speed([-tiny; 2], [0.0; 2], [2.0; 2], 1.0),
-        Err(PlannerError::NumericalFailure)
-    );
+    for (a, c, speed) in [
+        ([-tiny; 2], [2.0; 2], 1.0),
+        ([0.0, -tiny], [0.0, 2.0], 1.0),
+        ([-tiny, 0.0], [2.0, 0.0], 1.0),
+        ([-1.0; 2], [2.0; 2], tiny),
+        ([0.0, -1.0], [0.0, 2.0], tiny),
+        ([-1.0, 0.0], [2.0, 0.0], tiny),
+    ] {
+        assert_eq!(
+            next_speed(a, [0.0; 2], c, speed),
+            Err(PlannerError::NumericalFailure)
+        );
+    }
+}
+
+#[test]
+fn only_rounding_to_zero_is_rejected_at_the_subnormal_speed_boundary() {
+    let tiny = f64::from_bits(1);
+    for vertical in [false, true] {
+        let a = if vertical { [0.0, -1.0] } else { [-1.0, 0.0] };
+        for (second_delta, speed, expected) in [
+            (2.0_f64.next_down(), tiny, Ok(tiny)),
+            (2.0, tiny, Err(PlannerError::NumericalFailure)),
+            (2.0_f64.next_up(), tiny, Err(PlannerError::NumericalFailure)),
+            (2.0, 2.0 * tiny, Ok(tiny)),
+            (2.0, 0.0, Ok(0.0)),
+            (2.0, -0.0, Ok(0.0)),
+        ] {
+            let c = if vertical {
+                [0.0, second_delta]
+            } else {
+                [second_delta, 0.0]
+            };
+            assert_eq!(next_speed(a, [0.0; 2], c, speed), expected);
+        }
+    }
+}
+
+#[test]
+fn zero_boundary_speed_preserves_velocity_continuity_when_building_both_profiles() {
+    let velocity_limits = JointVelocityLimits::new(20.0, 20.0).unwrap();
+    let acceleration_limits = JointAccelerationLimits::new(40.0, 40.0).unwrap();
+    for speed in [0.0, -0.0] {
+        for (a, b, c) in [
+            ([0.0, 0.0], [2.0, -1.0], [6.0, -3.0]),
+            ([3.0, 0.0], [3.0, 1.0], [3.0, 3.0]),
+            ([0.0, 0.0], [2.0, -1.0], [4.0, 0.0]),
+        ] {
+            let outgoing = next_speed(a, b, c, speed).unwrap();
+            let first = CoordinatedJointMotionProfile::new(
+                angles(a),
+                angles(b),
+                &velocity_limits,
+                &acceleration_limits,
+                0.0,
+                speed,
+            )
+            .unwrap();
+            let second = CoordinatedJointMotionProfile::new(
+                angles(b),
+                angles(c),
+                &velocity_limits,
+                &acceleration_limits,
+                outgoing,
+                0.0,
+            )
+            .unwrap();
+            assert_eq!(first.velocity_at(first.total_time()), Ok((0.0, 0.0)));
+            assert_eq!(
+                first.velocity_at(first.total_time()),
+                second.velocity_at(0.0)
+            );
+            assert_eq!(second.velocity_at(0.0), Ok((0.0, 0.0)));
+            let first_end = first.position_at(first.total_time()).unwrap();
+            let second_start = second.position_at(0.0).unwrap();
+            assert_eq!([first_end.first_theta(), first_end.second_theta()], b);
+            assert_eq!([second_start.first_theta(), second_start.second_theta()], b);
+        }
+    }
 }
 
 #[test]

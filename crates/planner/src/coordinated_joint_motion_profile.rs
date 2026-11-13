@@ -172,7 +172,11 @@ impl CoordinatedJointMotionProfile {
             product_ratio(&[first_final_speed, d1_x.abs()], &[d2_x.abs()])
         };
 
-        utilities::validate_non_zero_finite_positive(result).map_err(|_| PlannerError::NumericalFailure)?;
+        if first_final_speed > 0.0 && result == 0.0 {
+            return Err(PlannerError::NumericalFailure);
+        }
+
+        utilities::validate_finite_positive(result).map_err(|_| PlannerError::NumericalFailure)?;
 
         Ok(result)
     }

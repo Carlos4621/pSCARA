@@ -50,7 +50,8 @@ impl LineSegment {
     }
 
     pub fn points(&self, max_point_distance: f64) -> Result<TrajectoryPoints<'_>, TrajectoryError> {
-        utilities::validate_non_zero_finite_positive(max_point_distance).map_err(|_| TrajectoryError::InvalidMaxPointDistance)?;
+        utilities::validate_non_zero_finite_positive(max_point_distance)
+            .map_err(|_| TrajectoryError::InvalidMaxPointDistance)?;
 
         let mut segments = libm::ceil(self.length / max_point_distance).max(1.0);
 
@@ -63,7 +64,11 @@ impl LineSegment {
 
         Self::validate_segments_number(segments)?;
 
-        Ok(TrajectoryPoints::new(self, segments as usize, max_point_distance))
+        Ok(TrajectoryPoints::new(
+            self,
+            segments as usize,
+            max_point_distance,
+        ))
     }
 
     fn validate_t(t: f64) -> Result<(), TrajectoryError> {

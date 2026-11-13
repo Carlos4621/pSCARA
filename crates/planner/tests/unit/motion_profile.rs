@@ -1,5 +1,8 @@
 use super::*;
 
+#[path = "motion_profile_progress_limits.rs"]
+mod progress_limits;
+
 #[test]
 fn stretched_asymmetric_profiles_scale_boundary_velocities_and_accelerations() {
     for end in [-20.0, 20.0] {

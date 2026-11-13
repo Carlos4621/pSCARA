@@ -1,5 +1,7 @@
+use kinematics::JointAngles;
+
 use crate::{
-    PlannerError,
+    JointAccelerationLimits, JointVelocityLimits, PlannerError,
     profile_math::{product_ratio, sqrt_product_ratio},
 };
 
@@ -295,6 +297,50 @@ impl MotionProfile {
 
     pub fn validate_time(&self, time: f64) -> Result<(), PlannerError> {
         Self::validate_duration_time(time, self.total_time)
+    }
+
+    fn calculate_progress_limits(
+        start: JointAngles,
+        end: JointAngles,
+        velocity_limits: &JointVelocityLimits,
+        acceleration_limits: &JointAccelerationLimits,
+    ) -> Result<(f64, f64), PlannerError> {
+        let first_displacement = (start.first_theta() - end.first_theta()).abs();
+        let second_displacement = (start.second_theta() - end.second_theta()).abs();
+
+        utilities::validate_finite_positive(first_displacement)
+            .map_err(|_| PlannerError::NumericalFailure)?;
+        utilities::validate_finite_positive(second_displacement)
+            .map_err(|_| PlannerError::NumericalFailure)?;
+
+        let mut max_progress_velocity = f64::INFINITY;
+        let mut max_progress_acceleration = f64::INFINITY;
+
+        if first_displacement > 0.0 {
+            max_progress_velocity = max_progress_velocity.min(product_ratio(
+                &[velocity_limits.first_joint_max_velocity()],
+                &[first_displacement],
+            ));
+            max_progress_acceleration = max_progress_acceleration.min(product_ratio(
+                &[acceleration_limits.first_joint_max_acceleration()],
+                &[first_displacement],
+            ));
+        }
+
+        if second_displacement > 0.0 {
+            max_progress_velocity = max_progress_velocity
+                .min(velocity_limits.second_joint_max_velocity() / second_displacement);
+            max_progress_acceleration = max_progress_acceleration
+                .min(acceleration_limits.second_joint_max_acceleration() / second_displacement);
+        }
+
+        utilities::validate_non_zero_finite_positive(max_progress_velocity)
+            .map_err(|_| PlannerError::NumericalFailure)?;
+        utilities::validate_non_zero_finite_positive(max_progress_acceleration)
+            .map_err(|_| PlannerError::NumericalFailure)?;
+
+
+        Ok((max_progress_velocity, max_progress_acceleration))
     }
 
     fn validate_duration_time(time: f64, duration: f64) -> Result<(), PlannerError> {

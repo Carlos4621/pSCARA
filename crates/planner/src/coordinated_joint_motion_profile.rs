@@ -110,4 +110,8 @@ impl CoordinatedJointMotionProfile {
 
         Ok((first_acceleration, second_acceleration))
     }
+
+    pub fn total_time(&self) -> f64 {
+        self.progress_profile.total_time()
+    }
 }

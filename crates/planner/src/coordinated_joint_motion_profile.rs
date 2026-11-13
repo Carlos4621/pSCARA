@@ -1,8 +1,8 @@
-use kinematics::{JointAngles, KinematicsError};
+use kinematics::JointAngles;
 
 use crate::{
     JointAccelerationLimits, JointVelocityLimits, MotionProfile, PlannerError,
-    profile_math::products_equal,
+    profile_math::{product_ratio, products_equal},
 };
 
 #[derive(Debug)]
@@ -130,8 +130,7 @@ impl CoordinatedJointMotionProfile {
         let d2_y = c.second_theta() - b.second_theta();
 
         for displacement in [d1_x, d1_y, d2_x, d2_y] {
-            utilities::validate_finite(displacement)
-                .map_err(|_| PlannerError::NumericalFailure)?;
+            utilities::validate_finite(displacement).map_err(|_| PlannerError::NumericalFailure)?;
         }
 
         if (d1_x == 0.0 && d1_y == 0.0) || (d2_x == 0.0 && d2_y == 0.0) {
@@ -147,5 +146,34 @@ impl CoordinatedJointMotionProfile {
         } else {
             d1_y.is_sign_negative() == d2_y.is_sign_negative()
         })
+    }
+
+    pub fn calculate_next_progress_speed(
+        a: JointAngles,
+        b: JointAngles,
+        c: JointAngles,
+        first_final_speed: f64,
+    ) -> Result<f64, PlannerError> {
+        utilities::validate_finite_positive(first_final_speed)
+            .map_err(|_| PlannerError::InvalidFinalSpeed)?;
+
+        if !Self::are_segments_same_direction(a, b, c)? {
+            return Ok(0.0);
+        }
+
+        let d1_x = b.first_theta() - a.first_theta();
+        let d2_x = c.first_theta() - b.first_theta();
+        let d1_y = b.second_theta() - a.second_theta();
+        let d2_y = c.second_theta() - b.second_theta();
+
+        let result = if d2_x == 0.0 {
+            product_ratio(&[first_final_speed, d1_y.abs()], &[d2_y.abs()])
+        } else {
+            product_ratio(&[first_final_speed, d1_x.abs()], &[d2_x.abs()])
+        };
+
+        utilities::validate_non_zero_finite_positive(result).map_err(|_| PlannerError::NumericalFailure)?;
+
+        Ok(result)
     }
 }

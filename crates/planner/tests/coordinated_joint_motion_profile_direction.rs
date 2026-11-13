@@ -1,4 +1,4 @@
-use kinematics::{JointAngles, KinematicsError};
+use kinematics::JointAngles;
 use planner::{CoordinatedJointMotionProfile, PlannerError};
 
 fn same_direction(a: [f64; 2], b: [f64; 2], c: [f64; 2]) -> Result<bool, PlannerError> {
@@ -172,10 +172,7 @@ fn subtraction_overflow_is_propagated_from_either_segment_and_joint() {
         ([large, 0.0], [large, 1.0], [-large, 2.0]),
         ([0.0, large], [1.0, large], [2.0, -large]),
     ] {
-        assert_eq!(
-            same_direction(a, b, c),
-            Err(PlannerError::NumericalFailure)
-        );
+        assert_eq!(same_direction(a, b, c), Err(PlannerError::NumericalFailure));
     }
 }
 
@@ -264,9 +261,6 @@ fn subtraction_overflow_is_rejected_even_when_the_other_segment_is_stationary() 
         ([-large; 2], [-large; 2], [large; 2]),
         ([-large; 2], [large; 2], [large; 2]),
     ] {
-        assert_eq!(
-            same_direction(a, b, c),
-            Err(PlannerError::NumericalFailure)
-        );
+        assert_eq!(same_direction(a, b, c), Err(PlannerError::NumericalFailure));
     }
 }

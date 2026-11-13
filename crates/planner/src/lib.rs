@@ -34,3 +34,6 @@ pub use motion_profile::MotionProfile;
 
 mod joint_motion_profile;
 pub use joint_motion_profile::JointMotionProfile;
+
+mod coordinated_joint_motion_profile;
+pub use coordinated_joint_motion_profile::CoordinatedJointMotionProfile;

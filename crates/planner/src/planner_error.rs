@@ -27,4 +27,5 @@ pub enum PlannerError {
     InvalidFinalSpeed,
     InvalidBoundarySpeed,
     InfeasibleMotion,
+    ZeroDisplacementMotion,
 }

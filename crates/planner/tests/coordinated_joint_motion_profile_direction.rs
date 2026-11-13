@@ -174,7 +174,7 @@ fn subtraction_overflow_is_propagated_from_either_segment_and_joint() {
     ] {
         assert_eq!(
             same_direction(a, b, c),
-            Err(PlannerError::Kinematics(KinematicsError::InvalidPoint))
+            Err(PlannerError::NumericalFailure)
         );
     }
 }
@@ -266,7 +266,7 @@ fn subtraction_overflow_is_rejected_even_when_the_other_segment_is_stationary() 
     ] {
         assert_eq!(
             same_direction(a, b, c),
-            Err(PlannerError::Kinematics(KinematicsError::InvalidPoint))
+            Err(PlannerError::NumericalFailure)
         );
     }
 }

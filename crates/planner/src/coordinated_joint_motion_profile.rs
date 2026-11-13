@@ -131,7 +131,7 @@ impl CoordinatedJointMotionProfile {
 
         for displacement in [d1_x, d1_y, d2_x, d2_y] {
             utilities::validate_finite(displacement)
-                .map_err(|_| PlannerError::Kinematics(KinematicsError::InvalidPoint))?;
+                .map_err(|_| PlannerError::NumericalFailure)?;
         }
 
         if (d1_x == 0.0 && d1_y == 0.0) || (d2_x == 0.0 && d2_y == 0.0) {

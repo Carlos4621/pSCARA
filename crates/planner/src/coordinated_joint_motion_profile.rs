@@ -1,6 +1,9 @@
-use kinematics::JointAngles;
+use kinematics::{JointAngles, KinematicsError};
 
-use crate::{JointAccelerationLimits, JointVelocityLimits, MotionProfile, PlannerError};
+use crate::{
+    JointAccelerationLimits, JointVelocityLimits, MotionProfile, PlannerError,
+    profile_math::products_equal,
+};
 
 #[derive(Debug)]
 pub struct CoordinatedJointMotionProfile {
@@ -113,5 +116,36 @@ impl CoordinatedJointMotionProfile {
 
     pub fn total_time(&self) -> f64 {
         self.progress_profile.total_time()
+    }
+
+    pub fn are_segments_same_direction(
+        a: JointAngles,
+        b: JointAngles,
+        c: JointAngles,
+    ) -> Result<bool, PlannerError> {
+        let d1_x = b.first_theta() - a.first_theta();
+        let d1_y = b.second_theta() - a.second_theta();
+
+        let d2_x = c.first_theta() - b.first_theta();
+        let d2_y = c.second_theta() - b.second_theta();
+
+        for displacement in [d1_x, d1_y, d2_x, d2_y] {
+            utilities::validate_finite(displacement)
+                .map_err(|_| PlannerError::Kinematics(KinematicsError::InvalidPoint))?;
+        }
+
+        if (d1_x == 0.0 && d1_y == 0.0) || (d2_x == 0.0 && d2_y == 0.0) {
+            return Ok(false);
+        }
+
+        if !products_equal([d1_x, d2_y], [d1_y, d2_x]) {
+            return Ok(false);
+        }
+
+        Ok(if d1_x != 0.0 {
+            d1_x.is_sign_negative() == d2_x.is_sign_negative()
+        } else {
+            d1_y.is_sign_negative() == d2_y.is_sign_negative()
+        })
     }
 }

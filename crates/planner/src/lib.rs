@@ -37,3 +37,6 @@ pub use joint_motion_profile::JointMotionProfile;
 
 mod coordinated_joint_motion_profile;
 pub use coordinated_joint_motion_profile::CoordinatedJointMotionProfile;
+
+mod joint_junction;
+pub use joint_junction::calculate_max_junction_progress_speeds;

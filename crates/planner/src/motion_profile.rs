@@ -299,7 +299,7 @@ impl MotionProfile {
         Self::validate_duration_time(time, self.total_time)
     }
 
-    fn calculate_progress_limits(
+    pub fn calculate_progress_limits(
         start: JointAngles,
         end: JointAngles,
         velocity_limits: &JointVelocityLimits,
@@ -328,17 +328,21 @@ impl MotionProfile {
         }
 
         if second_displacement > 0.0 {
-            max_progress_velocity = max_progress_velocity
-                .min(velocity_limits.second_joint_max_velocity() / second_displacement);
-            max_progress_acceleration = max_progress_acceleration
-                .min(acceleration_limits.second_joint_max_acceleration() / second_displacement);
+            max_progress_velocity = max_progress_velocity.min(product_ratio(
+                &[velocity_limits.second_joint_max_velocity()],
+                &[second_displacement],
+            ));
+
+            max_progress_acceleration = max_progress_acceleration.min(product_ratio(
+                &[acceleration_limits.second_joint_max_acceleration()],
+                &[second_displacement],
+            ));
         }
 
         utilities::validate_non_zero_finite_positive(max_progress_velocity)
             .map_err(|_| PlannerError::NumericalFailure)?;
         utilities::validate_non_zero_finite_positive(max_progress_acceleration)
             .map_err(|_| PlannerError::NumericalFailure)?;
-
 
         Ok((max_progress_velocity, max_progress_acceleration))
     }

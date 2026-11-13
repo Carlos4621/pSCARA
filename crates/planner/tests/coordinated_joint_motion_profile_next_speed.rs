@@ -94,13 +94,18 @@ fn reversing_direction_requires_zero_next_progress_speed() {
 }
 
 #[test]
-fn a_degenerate_segment_returns_zero_next_progress_speed() {
+fn a_degenerate_segment_propagates_zero_displacement_even_with_zero_requested_speed() {
     for (a, b, c) in [
         ([0.0; 2], [0.0; 2], [1.0; 2]),
         ([0.0; 2], [1.0; 2], [1.0; 2]),
         ([0.0, -0.0], [-0.0, 0.0], [0.0, -0.0]),
     ] {
-        assert_eq!(next_speed(a, b, c, 0.5), Ok(0.0));
+        for speed in [0.0, -0.0, f64::from_bits(1), 0.5, f64::MAX] {
+            assert_eq!(
+                next_speed(a, b, c, speed),
+                Err(PlannerError::ZeroDisplacementMotion)
+            );
+        }
     }
 }
 
@@ -160,8 +165,6 @@ fn a_required_stop_stays_valid_for_zero_or_positive_requested_speed() {
         for (a, b, c) in [
             ([0.0, 0.0], [2.0, -1.0], [4.0, 0.0]),
             ([0.0, 0.0], [2.0, -1.0], [0.0, 0.0]),
-            ([0.0; 2], [0.0; 2], [1.0; 2]),
-            ([0.0; 2], [1.0; 2], [1.0; 2]),
         ] {
             // This is the intentional stop shortcut, not numeric underflow
             // while scaling two parallel segments with a positive speed.

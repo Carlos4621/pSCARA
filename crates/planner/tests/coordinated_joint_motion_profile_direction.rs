@@ -177,15 +177,18 @@ fn subtraction_overflow_is_propagated_from_either_segment_and_joint() {
 }
 
 #[test]
-fn zero_displacement_never_reports_a_shared_direction() {
-    // Zero vectors have no direction. This checks that invariant without
-    // prescribing an as-yet undocumented error policy for degenerate segments.
+fn a_zero_displacement_segment_returns_its_specific_error() {
     for (a, b, c) in [
         ([0.0; 2], [0.0; 2], [1.0; 2]),
         ([0.0; 2], [1.0; 2], [1.0; 2]),
         ([0.0, -0.0], [-0.0, 0.0], [0.0, -0.0]),
+        ([f64::MAX, -f64::MAX], [f64::MAX, -f64::MAX], [0.0; 2]),
+        ([0.0; 2], [f64::MAX, -f64::MAX], [f64::MAX, -f64::MAX]),
     ] {
-        assert!(!matches!(same_direction(a, b, c), Ok(true)));
+        assert_eq!(
+            same_direction(a, b, c),
+            Err(PlannerError::ZeroDisplacementMotion)
+        );
     }
 }
 
@@ -240,12 +243,16 @@ fn all_small_integer_displacements_match_the_exact_geometric_oracle() {
         for y1 in -3_i32..=3 {
             for x2 in -3_i32..=3 {
                 for y2 in -3_i32..=3 {
-                    let expected = x1 * y2 == y1 * x2 && x1 * x2 + y1 * y2 > 0;
+                    let expected = if (x1 == 0 && y1 == 0) || (x2 == 0 && y2 == 0) {
+                        Err(PlannerError::ZeroDisplacementMotion)
+                    } else {
+                        Ok(x1 * y2 == y1 * x2 && x1 * x2 + y1 * y2 > 0)
+                    };
                     let a = [-f64::from(x1), -f64::from(y1)];
                     let c = [f64::from(x2), f64::from(y2)];
                     assert_eq!(
                         same_direction(a, [0.0; 2], c),
-                        Ok(expected),
+                        expected,
                         "d1=({x1},{y1}), d2=({x2},{y2})"
                     );
                 }

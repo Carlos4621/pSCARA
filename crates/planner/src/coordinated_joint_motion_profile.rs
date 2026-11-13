@@ -134,7 +134,7 @@ impl CoordinatedJointMotionProfile {
         }
 
         if (d1_x == 0.0 && d1_y == 0.0) || (d2_x == 0.0 && d2_y == 0.0) {
-            return Ok(false);
+            return Err(PlannerError::ZeroDisplacementMotion);
         }
 
         if !products_equal([d1_x, d2_y], [d1_y, d2_x]) {

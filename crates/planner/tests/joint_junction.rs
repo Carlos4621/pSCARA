@@ -22,7 +22,7 @@ fn junction(
         angles(b),
         angles(c),
         &JointVelocityLimits::new(velocity[0], velocity[1]).unwrap(),
-        JointAccelerationLimits::new(acceleration[0], acceleration[1]).unwrap(),
+        &JointAccelerationLimits::new(acceleration[0], acceleration[1]).unwrap(),
     )
 }
 
@@ -154,16 +154,29 @@ fn reversing_the_entire_path_exchanges_incoming_and_outgoing_progress_speeds() {
 }
 
 #[test]
-fn corners_reversals_and_degenerate_segments_require_a_stop() {
+fn corners_and_reversals_with_nonzero_segments_require_a_stop() {
     for (a, b, c) in [
         ([0.0, 0.0], [2.0, -1.0], [6.0, -2.0]),
         ([0.0, 0.0], [2.0, -1.0], [0.0, 0.0]),
         ([0.0, 0.0], [1.0, 0.0], [1.0, 1.0]),
+    ] {
+        assert_eq!(junction(a, b, c, [20.0; 2], [40.0; 2]), Ok((0.0, 0.0)));
+    }
+}
+
+#[test]
+fn zero_length_segments_propagate_zero_displacement_from_the_direction_check() {
+    for (a, b, c) in [
         ([0.0; 2], [0.0; 2], [1.0; 2]),
         ([0.0; 2], [1.0; 2], [1.0; 2]),
         ([0.0, -0.0], [-0.0, 0.0], [0.0, -0.0]),
+        ([f64::MAX, -f64::MAX], [f64::MAX, -f64::MAX], [0.0; 2]),
+        ([0.0; 2], [f64::MAX, -f64::MAX], [f64::MAX, -f64::MAX]),
     ] {
-        assert_eq!(junction(a, b, c, [20.0; 2], [40.0; 2]), Ok((0.0, 0.0)));
+        assert_eq!(
+            junction(a, b, c, [20.0; 2], [40.0; 2]),
+            Err(PlannerError::ZeroDisplacementMotion)
+        );
     }
 }
 

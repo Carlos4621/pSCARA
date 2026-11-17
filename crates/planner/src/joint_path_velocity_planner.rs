@@ -22,12 +22,14 @@ fn limit_reachable_speed(
     distance: f64,
     speed_limit: f64,
 ) -> Result<f64, PlannerError> {
+    for value in [initial_speed, acceleration, distance, speed_limit] {
+        utilities::validate_finite_positive(value).map_err(|_| PlannerError::NumericalFailure)?;
+    }
+
     let calculated_speed = libm::hypot(
         initial_speed,
         sqrt_product_ratio(&[2.0, acceleration, distance], &[]),
     );
-
-    utilities::validate_finite(calculated_speed).map_err(|_| PlannerError::NumericalFailure)?;
 
     let mut speed = calculated_speed.min(speed_limit);
     for adjustment in 0..=MAX_ROUNDING_ADJUSTMENTS {

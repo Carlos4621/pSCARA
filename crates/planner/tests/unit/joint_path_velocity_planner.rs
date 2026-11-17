@@ -195,53 +195,101 @@ fn increasing_each_nonnegative_input_cannot_lower_the_speed_bound() {
 }
 
 #[test]
-fn nonfinite_computed_speeds_return_numerical_failure_before_capping() {
+fn nonfinite_arguments_are_rejected_in_every_position() {
     for invalid in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
-        for (initial, acceleration, distance) in [
-            (invalid, 1.0, 1.0),
-            (0.0, invalid, 1.0),
-            (0.0, 1.0, invalid),
-        ] {
+        for index in 0..4 {
+            let mut args = [0.0, 1.0, 1.0, 1.0];
+            args[index] = invalid;
             assert_eq!(
-                limit_reachable_speed(initial, acceleration, distance, 1.0),
-                Err(PlannerError::NumericalFailure)
+                limit_reachable_speed(args[0], args[1], args[2], args[3]),
+                Err(PlannerError::NumericalFailure),
+                "argument {index}, value {invalid:?}"
             );
         }
     }
 }
 
 #[test]
-fn negative_radicands_return_numerical_failure() {
-    for (acceleration, distance) in [(-1.0, 1.0), (1.0, -1.0)] {
-        assert_eq!(
-            limit_reachable_speed(0.0, acceleration, distance, 10.0),
-            Err(PlannerError::NumericalFailure)
-        );
+fn negative_arguments_are_rejected_in_every_position() {
+    for invalid in [-f64::from_bits(1), -1.0, -f64::MAX] {
+        for index in 0..4 {
+            let mut args = [0.0, 1.0, 1.0, 1.0];
+            args[index] = invalid;
+            assert_eq!(
+                limit_reachable_speed(args[0], args[1], args[2], args[3]),
+                Err(PlannerError::NumericalFailure),
+                "argument {index}, value {invalid:e}"
+            );
+        }
     }
 }
 
 #[test]
-fn unrepresentable_uncapped_speed_returns_numerical_failure() {
-    for (initial, acceleration, distance) in [
-        (0.0, f64::MAX, f64::MAX),
-        (f64::MAX, f64::MAX / 2.0, f64::MAX / 2.0),
+fn invalid_arguments_are_not_hidden_by_zero_motion_or_a_zero_cap() {
+    for baseline in [[0.0; 4], [3.0, 2.0, 0.0, 0.0], [f64::MAX; 4]] {
+        for invalid in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -1.0] {
+            for index in 0..4 {
+                let mut args = baseline;
+                args[index] = invalid;
+                assert_eq!(
+                    limit_reachable_speed(args[0], args[1], args[2], args[3]),
+                    Err(PlannerError::NumericalFailure),
+                    "argument {index}, args={args:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn signed_zero_is_accepted_in_every_argument() {
+    for zero in [0.0, -0.0] {
+        for (index, expected) in [4.0, 3.0, 3.0, 0.0].into_iter().enumerate() {
+            let mut args = [3.0, 2.0, 4.0, 10.0];
+            args[index] = zero;
+            assert_eq!(
+                limit_reachable_speed(args[0], args[1], args[2], args[3]),
+                Ok(expected),
+                "argument {index}, zero={zero:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn square_root_overflow_is_capped_to_a_finite_speed() {
+    let theoretical = crate::profile_math::sqrt_product_ratio(&[2.0, f64::MAX, f64::MAX], &[]);
+    assert!(theoretical.is_infinite());
+    for cap in [
+        0.0,
+        -0.0,
+        f64::from_bits(1),
+        f64::MIN_POSITIVE,
+        1.0,
+        f64::MAX / 2.0,
+        f64::MAX.next_down(),
+        f64::MAX,
     ] {
-        assert_eq!(
-            limit_reachable_speed(initial, acceleration, distance, f64::MAX),
-            Err(PlannerError::NumericalFailure)
-        );
+        assert_eq!(limit_reachable_speed(0.0, f64::MAX, f64::MAX, cap), Ok(cap));
     }
 }
 
 #[test]
-fn uncapped_overflow_is_reported_even_when_the_cap_is_representable() {
-    // Current policy validates the theoretical speed before applying the cap.
-    // A future saturating implementation would instead return the finite cap.
-    for cap in [0.0, 1.0, f64::MAX] {
-        assert_eq!(
-            limit_reachable_speed(0.0, f64::MAX, f64::MAX, cap),
-            Err(PlannerError::NumericalFailure)
-        );
+fn hypot_overflow_is_capped_even_when_the_square_root_is_finite() {
+    for (initial, acceleration, distance) in [
+        (f64::MAX, f64::MAX / 2.0, f64::MAX / 2.0),
+        (f64::MAX / 2.0, f64::MAX / 2.0, f64::MAX),
+    ] {
+        let ramp_speed =
+            crate::profile_math::sqrt_product_ratio(&[2.0, acceleration, distance], &[]);
+        assert!(ramp_speed.is_finite());
+        assert!(libm::hypot(initial, ramp_speed).is_infinite());
+        for cap in [0.0, f64::from_bits(1), 1.0, f64::MAX / 2.0, f64::MAX] {
+            assert_eq!(
+                limit_reachable_speed(initial, acceleration, distance, cap),
+                Ok(cap)
+            );
+        }
     }
 }
 

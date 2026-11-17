@@ -6,7 +6,7 @@ use crate::{
     CoordinatedJointMotionProfile, JointAccelerationLimits, JointVelocityLimits, PlannerError,
 };
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct CoordinatedJointPathProfiles<'a> {
     points: &'a [JointAngles],
     speeds: &'a [f64],
@@ -76,11 +76,11 @@ impl<'a> CoordinatedJointPathProfiles<'a> {
     }
 
     pub fn total_path_time(
-        profiles: CoordinatedJointPathProfiles<'_>,
+        self,
     ) -> Result<f64, PlannerError> {
         let mut total_time = 0.0;
 
-        for profile in profiles {
+        for profile in self {
             let profile = profile?;
 
             let profile_duration = profile.total_time();

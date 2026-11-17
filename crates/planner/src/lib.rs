@@ -46,3 +46,6 @@ pub use joint_path_velocity_planner::plan_joint_path_speeds;
 
 mod coordinated_joint_path_profiles;
 pub use coordinated_joint_path_profiles::CoordinatedJointPathProfiles;
+
+mod timed_coordinated_joint_profile;
+pub use timed_coordinated_joint_profile::TimedCoordinatedJointProfile;

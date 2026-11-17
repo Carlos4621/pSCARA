@@ -1,3 +1,5 @@
+use core::iter::FusedIterator;
+
 use kinematics::JointAngles;
 
 use crate::{
@@ -146,7 +148,17 @@ impl Iterator for CoordinatedJointPathProfiles<'_> {
             self.acceleration_limits,
         ))
     }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let remaining = self.points.len() - 1 - self.current_segment;
+
+        (remaining, Some(remaining))
+    }
 }
+
+impl ExactSizeIterator for CoordinatedJointPathProfiles<'_> {}
+
+impl FusedIterator for CoordinatedJointPathProfiles<'_> {}
 
 #[cfg(test)]
 #[path = "../tests/unit/coordinated_joint_path_profiles.rs"]

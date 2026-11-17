@@ -6,6 +6,16 @@ use planner::{
 
 type Pair = [f64; 2];
 
+fn assert_remaining<I: ExactSizeIterator + core::iter::FusedIterator>(
+    iterator: &I,
+    remaining: usize,
+) {
+    // UFCS deliberately calls the traits rather than an inherent method with
+    // the same name. The bounds also check that both traits are implemented.
+    assert_eq!(Iterator::size_hint(iterator), (remaining, Some(remaining)));
+    assert_eq!(ExactSizeIterator::len(iterator), remaining);
+}
+
 fn angles(q: Pair) -> JointAngles {
     JointAngles::new(q[0], q[1]).unwrap()
 }
@@ -40,6 +50,7 @@ fn check_iteration<const N: usize>(
     let mut chain = CoordinatedJointPathProfiles::new(&points, &speeds, &vl, &al).unwrap();
     let mut profiles = Vec::new();
     for i in 0..N - 1 {
+        assert_remaining(&chain, N - 1 - i);
         let profile = chain
             .next()
             .expect("iterator ended before the last segment")
@@ -63,12 +74,77 @@ fn check_iteration<const N: usize>(
     }
     assert_eq!(profiles.len(), N - 1);
     for _ in 0..8 {
+        assert_remaining(&chain, 0);
         assert!(
             chain.next().is_none(),
             "exhausted iterator yielded another profile"
         );
     }
     profiles
+}
+
+#[test]
+fn exact_remaining_length_decreases_after_each_next_and_stays_zero_at_exhaustion() {
+    let points = [0.0, 1.0, 2.0, 3.0, 4.0].map(|x| angles([x, 0.0]));
+    let speeds = [0.0; 5];
+    let vl = JointVelocityLimits::new(10.0, 10.0).unwrap();
+    let al = JointAccelerationLimits::new(2.0, 2.0).unwrap();
+    let mut chain = CoordinatedJointPathProfiles::new(&points, &speeds, &vl, &al).unwrap();
+    for remaining in (1..=4).rev() {
+        assert_remaining(&chain, remaining);
+        assert!(chain.next().unwrap().is_ok());
+        assert_remaining(&chain, remaining - 1);
+    }
+    for _ in 0..8 {
+        assert!(chain.next().is_none());
+        assert_remaining(&chain, 0);
+    }
+}
+
+#[test]
+fn exact_remaining_length_tracks_skipping_partial_consumption_and_overrun() {
+    let points = [0.0, 1.0, 2.0, 3.0, 4.0, 5.0].map(|x| angles([x, 0.0]));
+    let speeds = [0.0; 6];
+    let vl = JointVelocityLimits::new(10.0, 10.0).unwrap();
+    let al = JointAccelerationLimits::new(2.0, 2.0).unwrap();
+    let mut chain = CoordinatedJointPathProfiles::new(&points, &speeds, &vl, &al).unwrap();
+    assert_remaining(&chain, 5);
+    assert!(chain.next().unwrap().is_ok());
+    assert_remaining(&chain, 4);
+    assert!(chain.nth(1).unwrap().is_ok());
+    assert_remaining(&chain, 2);
+    {
+        let mut prefix = chain.by_ref().take(1);
+        assert_remaining(&prefix, 1);
+        assert!(prefix.next().unwrap().is_ok());
+        assert_remaining(&prefix, 0);
+        assert!(prefix.next().is_none());
+    }
+    assert_remaining(&chain, 1);
+    assert!(chain.nth(10).is_none());
+    assert_remaining(&chain, 0);
+    assert_eq!(chain.by_ref().count(), 0);
+    assert_remaining(&chain, 0);
+}
+
+#[test]
+fn exact_size_hint_is_available_through_dynamic_trait_dispatch() {
+    let points = [[0.0, 0.0], [1.0, 0.0], [2.0, 0.0]].map(angles);
+    let speeds = [0.0; 3];
+    let vl = JointVelocityLimits::new(10.0, 10.0).unwrap();
+    let al = JointAccelerationLimits::new(2.0, 2.0).unwrap();
+    let mut chain = CoordinatedJointPathProfiles::new(&points, &speeds, &vl, &al).unwrap();
+    let iterator: &mut dyn ExactSizeIterator<
+        Item = Result<CoordinatedJointMotionProfile, PlannerError>,
+    > = &mut chain;
+    for remaining in (1..=2).rev() {
+        assert_eq!(iterator.size_hint(), (remaining, Some(remaining)));
+        assert_eq!(iterator.len(), remaining);
+        assert!(iterator.next().unwrap().is_ok());
+    }
+    assert_eq!(iterator.size_hint(), (0, Some(0)));
+    assert_eq!(iterator.len(), 0);
+    assert!(iterator.next().is_none());
 }
 
 #[test]

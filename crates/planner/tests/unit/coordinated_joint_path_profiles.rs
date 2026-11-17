@@ -4,6 +4,11 @@ fn angles(first: f64) -> JointAngles {
     JointAngles::new(first, 0.0).unwrap()
 }
 
+fn assert_remaining<I: ExactSizeIterator + FusedIterator>(iterator: &I, remaining: usize) {
+    assert_eq!(Iterator::size_hint(iterator), (remaining, Some(remaining)));
+    assert_eq!(ExactSizeIterator::len(iterator), remaining);
+}
+
 // Public construction validates every segment up front. These deliberately
 // invalid private fixtures exercise next's defensive Result path without
 // unsafe mutation or implying that new accepts the invalid states.
@@ -36,11 +41,14 @@ fn a_failed_segment_is_reported_once_and_the_next_segment_is_still_attempted() {
             acceleration_limits: &al,
             current_segment: 0,
         };
+        assert_remaining(&chain, 2);
         assert_eq!(
             chain.next().expect("error was hidden as None").unwrap_err(),
             expected
         );
+        assert_remaining(&chain, 1);
         let next = chain.next().expect("later segment was skipped").unwrap();
+        assert_remaining(&chain, 0);
         assert_eq!(next.position_at(0.0).unwrap().first_theta(), coordinates[1]);
         assert_eq!(
             next.position_at(next.total_time()).unwrap().first_theta(),
@@ -48,6 +56,7 @@ fn a_failed_segment_is_reported_once_and_the_next_segment_is_still_attempted() {
         );
         assert!(chain.next().is_none());
         assert!(chain.next().is_none());
+        assert_remaining(&chain, 0);
     }
 }
 
@@ -64,12 +73,16 @@ fn an_error_on_the_final_segment_is_followed_by_permanent_exhaustion() {
         acceleration_limits: &al,
         current_segment: 0,
     };
+    assert_remaining(&chain, 2);
     assert!(chain.next().unwrap().is_ok());
+    assert_remaining(&chain, 1);
     assert_eq!(
         chain.next().unwrap().unwrap_err(),
         PlannerError::ZeroDisplacementMotion
     );
+    assert_remaining(&chain, 0);
     for _ in 0..8 {
         assert!(chain.next().is_none());
+        assert_remaining(&chain, 0);
     }
 }

@@ -1,6 +1,9 @@
 use super::limit_reachable_speed;
 use crate::{MotionProfile, PlannerError};
 
+#[path = "segment_path_limits.rs"]
+mod segment_path_limits;
+
 fn close(actual: f64, expected: f64) {
     assert!(actual.is_finite() && actual >= 0.0, "{actual:e}");
     assert!(

@@ -75,6 +75,31 @@ impl<'a> CoordinatedJointPathProfiles<'a> {
         })
     }
 
+    pub fn total_path_time(
+        profiles: CoordinatedJointPathProfiles<'_>,
+    ) -> Result<f64, PlannerError> {
+        let mut total_time = 0.0;
+
+        for profile in profiles {
+            let profile = profile?;
+
+            let profile_duration = profile.total_time();
+
+            let next_time = total_time + profile_duration;
+
+            utilities::validate_finite_positive(next_time)
+                .map_err(|_| PlannerError::TimeElapsedOverflow)?;
+
+            if profile_duration > 0.0 && next_time == total_time {
+                return Err(PlannerError::TimeElapsedPrecisionLost);
+            }
+
+            total_time = next_time;
+        }
+
+        Ok(total_time)
+    }
+
     fn build_segment_profile(
         start: JointAngles,
         end: JointAngles,

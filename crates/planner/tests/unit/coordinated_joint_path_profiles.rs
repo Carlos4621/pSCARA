@@ -86,3 +86,50 @@ fn an_error_on_the_final_segment_is_followed_by_permanent_exhaustion() {
         assert_remaining(&chain, 0);
     }
 }
+
+#[test]
+fn total_path_time_propagates_upstream_errors_without_reclassifying_them() {
+    // These private fixtures exercise errors that new would reject up front.
+    for (coordinates, speeds, expected) in [
+        (
+            [0.0, 0.0, 1.0],
+            [0.0; 3],
+            PlannerError::ZeroDisplacementMotion,
+        ),
+        (
+            [0.0, 1.0, 2.0],
+            [3.0, 0.0, 0.0],
+            PlannerError::InfeasibleMotion,
+        ),
+        (
+            [0.0, 2.0, 3.0],
+            [f64::from_bits(1), 0.0, 0.0],
+            PlannerError::NumericalFailure,
+        ),
+        (
+            [0.0, 1.0, 3.0],
+            [0.0, f64::from_bits(1), 0.0],
+            PlannerError::NumericalFailure,
+        ),
+        (
+            [0.0, 1.0, 1.0],
+            [0.0; 3],
+            PlannerError::ZeroDisplacementMotion,
+        ),
+    ] {
+        let points = coordinates.map(angles);
+        let vl = JointVelocityLimits::new(10.0, 10.0).unwrap();
+        let al = JointAccelerationLimits::new(2.0, 2.0).unwrap();
+        let profiles = CoordinatedJointPathProfiles {
+            points: &points,
+            speeds: &speeds,
+            velocity_limits: &vl,
+            acceleration_limits: &al,
+            current_segment: 0,
+        };
+        assert_eq!(
+            CoordinatedJointPathProfiles::total_path_time(profiles),
+            Err(expected)
+        );
+    }
+}

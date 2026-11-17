@@ -411,7 +411,7 @@ impl MotionProfile {
             )
     }
 
-    fn speed_change_distance(higher: f64, lower: f64, acceleration: f64) -> f64 {
+    pub(crate) fn speed_change_distance(higher: f64, lower: f64, acceleration: f64) -> f64 {
         if higher == lower {
             return 0.0;
         }

@@ -43,3 +43,6 @@ pub use joint_junction::calculate_max_junction_progress_speeds;
 
 mod joint_path_velocity_planner;
 pub use joint_path_velocity_planner::plan_joint_path_speeds;
+
+mod coordinated_joint_path_profiles;
+pub use coordinated_joint_path_profiles::CoordinatedJointPathProfiles;

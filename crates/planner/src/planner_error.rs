@@ -30,4 +30,5 @@ pub enum PlannerError {
     ZeroDisplacementMotion,
     MorePointsThanSpeedsBuffer,
     InsufficientPoints,
+    DiscontinuousJointVelocity,
 }

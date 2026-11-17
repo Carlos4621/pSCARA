@@ -54,44 +54,13 @@ impl<'a> CoordinatedJointPathProfiles<'a> {
         }
 
         for i in 0..points.len() - 1 {
-            let start = points[i];
-            let end = points[i + 1];
-
-            let d1 = end.first_theta() - start.first_theta();
-            let d2 = end.second_theta() - start.second_theta();
-
-            for displacement in [d1, d2] {
-                utilities::validate_finite(displacement)
-                    .map_err(|_| PlannerError::NumericalFailure)?;
-            }
-
-            let length = d1.abs().max(d2.abs());
-
-            utilities::validate_non_zero_finite_positive(length)
-                .map_err(|_| PlannerError::ZeroDisplacementMotion)?;
-
-            let initial_progress_speed = speeds[i] / length;
-            let final_progress_speed = speeds[i + 1] / length;
-
-            for (speed, progress_speed) in [
-                (speeds[i], initial_progress_speed),
-                (speeds[i + 1], final_progress_speed),
-            ] {
-                utilities::validate_finite_positive(progress_speed)
-                    .map_err(|_| PlannerError::NumericalFailure)?;
-                // A positive requested speed must not silently become a stop.
-                if speed > 0.0 && progress_speed == 0.0 {
-                    return Err(PlannerError::NumericalFailure);
-                }
-            }
-
-            CoordinatedJointMotionProfile::new(
-                start,
-                end,
+            Self::build_segment_profile(
+                points[i],
+                points[i + 1],
+                speeds[i],
+                speeds[i + 1],
                 velocity_limits,
                 acceleration_limits,
-                initial_progress_speed,
-                final_progress_speed,
             )?;
         }
 
@@ -102,5 +71,58 @@ impl<'a> CoordinatedJointPathProfiles<'a> {
             acceleration_limits,
             current_segment: 0,
         })
+    }
+
+    fn build_segment_profile(
+        start: JointAngles,
+        end: JointAngles,
+        initial_speed: f64,
+        final_speed: f64,
+        velocity_limits: &JointVelocityLimits,
+        acceleration_limits: &JointAccelerationLimits,
+    ) -> Result<CoordinatedJointMotionProfile, PlannerError> {
+        let d1 = end.first_theta() - start.first_theta();
+        let d2 = end.second_theta() - start.second_theta();
+
+        for i in [d1, d2] {
+            utilities::validate_finite(i).map_err(|_| PlannerError::NumericalFailure)?;
+        }
+
+        let length = d1.abs().max(d2.abs());
+
+        utilities::validate_non_zero_finite_positive(length)
+            .map_err(|_| PlannerError::ZeroDisplacementMotion)?;
+
+        let initial_progress_speed = initial_speed / length;
+        let final_progress_speed = final_speed / length;
+
+        for (speed, progress_speed) in [
+            (initial_speed, initial_progress_speed),
+            (final_speed, final_progress_speed),
+        ] {
+            utilities::validate_finite_positive(progress_speed)
+                .map_err(|_| PlannerError::NumericalFailure)?;
+            // A positive requested speed must not silently become a stop.
+            if speed > 0.0 && progress_speed == 0.0 {
+                return Err(PlannerError::NumericalFailure);
+            }
+        }
+
+        CoordinatedJointMotionProfile::new(
+            start,
+            end,
+            velocity_limits,
+            acceleration_limits,
+            initial_progress_speed,
+            final_progress_speed,
+        )
+    }
+}
+
+impl Iterator for CoordinatedJointPathProfiles<'_> {
+    type Item = Result<CoordinatedJointMotionProfile, PlannerError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        todo!()
     }
 }

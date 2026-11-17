@@ -123,6 +123,31 @@ impl Iterator for CoordinatedJointPathProfiles<'_> {
     type Item = Result<CoordinatedJointMotionProfile, PlannerError>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        todo!()
+        if self.current_segment >= self.points.len() - 1 {
+            return None;
+        }
+
+        let i = self.current_segment;
+
+        let start = self.points[i];
+        let end = self.points[i + 1];
+
+        let initial_speed = self.speeds[i];
+        let final_speed = self.speeds[i + 1];
+
+        self.current_segment += 1;
+
+        Some(Self::build_segment_profile(
+            start,
+            end,
+            initial_speed,
+            final_speed,
+            self.velocity_limits,
+            self.acceleration_limits,
+        ))
     }
 }
+
+#[cfg(test)]
+#[path = "../tests/unit/coordinated_joint_path_profiles.rs"]
+mod tests;

@@ -1,7 +1,7 @@
 use kinematics::JointAngles;
 use planner::{
-    CoordinatedJointMotionProfile, JointAccelerationLimits, JointVelocityLimits,
-    plan_joint_path_speeds,
+    CoordinatedJointMotionProfile, CoordinatedJointPathProfiles, JointAccelerationLimits,
+    JointVelocityLimits, plan_joint_path_speeds,
 };
 
 type Pair = [f64; 2];
@@ -72,6 +72,9 @@ fn check_chain<const N: usize>(
     // s in [0, length], while each profile uses progress in [0, 1]. Thus each
     // segment needs its own conversion, even at a shared junction.
     let mut profiles = Vec::with_capacity(N - 1);
+    let mut chain =
+        CoordinatedJointPathProfiles::new(&points, &speeds, &velocity_limits, &acceleration_limits)
+            .unwrap();
     for i in 0..N - 1 {
         let delta = [
             coordinates[i + 1][0] - coordinates[i][0],
@@ -95,7 +98,12 @@ fn check_chain<const N: usize>(
             coordinates[i],
             coordinates[i + 1]
         );
-        let profile = result.unwrap();
+        let expected = result.unwrap();
+        let profile = chain
+            .next()
+            .expect("missing segment")
+            .expect("validated segment failed");
+        assert_eq!(profile.total_time(), expected.total_time());
         let duration = profile.total_time();
         assert!(duration.is_finite() && duration > 0.0);
 
@@ -164,6 +172,12 @@ fn check_chain<const N: usize>(
             );
         }
         profiles.push(profile);
+    }
+    for _ in 0..3 {
+        assert!(
+            chain.next().is_none(),
+            "unexpected segment after exhaustion"
+        );
     }
 
     // The robot is at rest, in both joints, at the beginning and the end.

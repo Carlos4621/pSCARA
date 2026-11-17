@@ -28,4 +28,6 @@ pub enum PlannerError {
     InvalidBoundarySpeed,
     InfeasibleMotion,
     ZeroDisplacementMotion,
+    MorePointsThanSpeedsBuffer,
+    InsufficientPoints,
 }

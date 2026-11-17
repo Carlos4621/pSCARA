@@ -1,7 +1,9 @@
 use kinematics::JointAngles;
 
 use crate::{
-    JointAccelerationLimits, JointVelocityLimits, MotionProfile, PlannerError, profile_math::{product_ratio, sqrt_product_ratio},
+    CoordinatedJointMotionProfile, JointAccelerationLimits, JointVelocityLimits, MotionProfile,
+    PlannerError,
+    profile_math::{product_ratio, sqrt_product_ratio},
 };
 
 const MAX_ROUNDING_ADJUSTMENTS: u8 = 4;
@@ -12,7 +14,58 @@ pub fn plan_joint_path_speeds(
     acceleration_limits: &JointAccelerationLimits,
     speeds: &mut [f64],
 ) -> Result<(), PlannerError> {
-    todo!()
+    if points.len() < 2 {
+        return Err(PlannerError::InsufficientPoints);
+    }
+
+    if points.len() != speeds.len() {
+        return Err(PlannerError::MorePointsThanSpeedsBuffer);
+    }
+
+    for pair in points.windows(2) {
+        segment_path_limits(pair[0], pair[1], velocity_limits, acceleration_limits)?;
+    }
+
+    speeds.fill(0.0);
+
+    for i in 1..points.len() - 1 {
+        if !CoordinatedJointMotionProfile::are_segments_same_direction(
+            points[i - 1],
+            points[i],
+            points[i + 1],
+        )? {
+            continue;
+        }
+
+        let (_, first_velocity, _) = segment_path_limits(
+            points[i - 1],
+            points[i],
+            velocity_limits,
+            acceleration_limits,
+        )?;
+        let (_, second_velocity, _) = segment_path_limits(
+            points[i],
+            points[i + 1],
+            velocity_limits,
+            acceleration_limits,
+        )?;
+
+        speeds[i] = first_velocity.min(second_velocity);
+    }
+
+    for i in 0..points.len() - 1 {
+        let (length, _, acceleration) = segment_path_limits(points[i], points[i + 1], velocity_limits, acceleration_limits)?;
+
+        speeds[i + 1] = limit_reachable_speed(speeds[i], acceleration, length, speeds[i + 1])?;
+    }
+
+    for i in (0..points.len() - 1).rev() {
+        let (length, _, acceleration) = segment_path_limits(points[i], points[i + 1], velocity_limits, acceleration_limits)?;
+
+        speeds[i] = limit_reachable_speed(speeds[i + 1], acceleration, length, speeds[i])?;
+    }
+
+    Ok(())
 }
 
 fn limit_reachable_speed(
@@ -85,15 +138,9 @@ fn segment_path_limits(
             continue;
         }
 
-        let velocity_cap = product_ratio(
-            &[velocity, length],
-            &[displacement],
-        );
+        let velocity_cap = product_ratio(&[velocity, length], &[displacement]);
 
-        let acceleration_cap = product_ratio(
-            &[acceleration, length],
-            &[displacement],
-        );
+        let acceleration_cap = product_ratio(&[acceleration, length], &[displacement]);
 
         max_velocity = max_velocity.min(velocity_cap);
         max_acceleration = max_acceleration.min(acceleration_cap);

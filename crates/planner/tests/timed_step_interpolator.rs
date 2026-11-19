@@ -47,14 +47,14 @@ fn stationary_movement_is_empty_even_at_the_last_tick() {
 }
 
 #[test]
-fn duration_must_be_strictly_greater_than_the_event_count() {
+fn rejects_only_intervals_with_fewer_ticks_than_events() {
     for (duration, first, second) in [
-        (1, 1, 0),
-        (1, 0, 1),
-        (4, 4, 4),
+        (1, 2, 0),
+        (1, 0, 2),
         (4, 5, 2),
         (4, 2, 5),
-        (u64::MAX, u64::MAX, 1),
+        (4, 5, 5),
+        (u64::MAX - 1, u64::MAX, 1),
     ] {
         assert_eq!(
             TimedStepInterpolator::new(interval(0, duration, first, second)).unwrap_err(),
@@ -74,15 +74,33 @@ fn duration_must_be_strictly_greater_than_the_event_count() {
 }
 
 #[test]
-fn a_single_event_is_scheduled_at_the_interval_end() {
-    for (first, second, expected) in [
-        (1, 0, event(13, true, false)),
-        (0, 1, event(13, false, true)),
-        (1, 1, event(13, true, true)),
-    ] {
-        let mut iter = TimedStepInterpolator::new(interval(10, 13, first, second)).unwrap();
-        assert_eq!(iter.next(), Some(expected));
+fn matching_duration_schedules_one_event_per_tick_up_to_u64_max() {
+    let start = u64::MAX - 4;
+    for (first, second) in [(4, 2), (2, 4), (4, 4)] {
+        let mut iter =
+            TimedStepInterpolator::new(interval(start, u64::MAX, first, second)).unwrap();
+        for (offset, both) in [(1, false), (2, true), (3, false), (4, true)] {
+            assert_eq!(
+                iter.next(),
+                Some(event(
+                    start + offset,
+                    first == 4 || both,
+                    second == 4 || both
+                ))
+            );
+        }
         assert_exhausted(&mut iter);
+    }
+}
+
+#[test]
+fn a_single_event_is_scheduled_at_the_interval_end() {
+    for end in [11, 13] {
+        for (first, second) in [(1, 0), (0, 1), (1, 1)] {
+            let mut iter = TimedStepInterpolator::new(interval(10, end, first, second)).unwrap();
+            assert_eq!(iter.next(), Some(event(end, first != 0, second != 0)));
+            assert_exhausted(&mut iter);
+        }
     }
 }
 
@@ -115,7 +133,7 @@ fn a_grid_of_schedules_has_ordered_ticks_and_matches_independent_integer_bounds(
                 let count = first.max(second);
                 let outcome =
                     TimedStepInterpolator::new(interval(start, start + duration, first, second));
-                if count >= duration {
+                if count > duration {
                     assert_eq!(
                         outcome.unwrap_err(),
                         PlannerError::InsufficientTicksForSteps
@@ -178,11 +196,15 @@ fn a_maximum_duration_uses_wide_products_and_can_end_at_u64_max() {
 }
 
 #[test]
-fn almost_u64_max_events_can_be_sampled_lazily() {
-    let count = u64::MAX - 1;
-    let mut iter = TimedStepInterpolator::new(interval(0, u64::MAX, count - 1, count)).unwrap();
-    for index in 1..=64 {
-        assert_eq!(iter.next(), Some(event(index + 1, index > 1, true)));
+fn up_to_u64_max_events_can_be_sampled_lazily() {
+    for (count, extra_tick) in [(u64::MAX - 1, 1), (u64::MAX, 0)] {
+        let mut iter = TimedStepInterpolator::new(interval(0, u64::MAX, count - 1, count)).unwrap();
+        for index in 1..=64 {
+            assert_eq!(
+                iter.next(),
+                Some(event(index + extra_tick, index > 1, true))
+            );
+        }
     }
 }
 
@@ -198,15 +220,15 @@ fn consecutive_intervals_from_a_trajectory_reach_their_targets_without_duplicate
     let cursor =
         CoordinatedJointTrajectoryCursor::new(CoordinatedJointTrajectory::new(timed).unwrap());
     let converter = JointToStepsConverter::new(8.0, 16.0).unwrap();
-    let mut sampler = MotorPositionSampler::new(cursor, converter, StepTimeBase::new(16).unwrap());
+    let mut sampler = MotorPositionSampler::new(cursor, converter, StepTimeBase::new(8).unwrap());
 
     let mut previous_tick = 0;
     let mut reached = sampler.sample_at_tick(0).unwrap();
-    for (end, expected) in [
-        (16, steps(4, -4)),
-        (32, steps(8, -8)),
-        (48, steps(8, -16)),
-        (64, steps(8, -24)),
+    for (end, expected, tick_spacing) in [
+        (8, steps(4, -4), 2),
+        (16, steps(8, -8), 2),
+        (24, steps(8, -16), 1),
+        (32, steps(8, -24), 1),
     ] {
         let target = sampler.sample_at_tick(end).unwrap();
         assert_eq!(target, expected);
@@ -220,7 +242,8 @@ fn consecutive_intervals_from_a_trajectory_reach_their_targets_without_duplicate
             }
         };
         for sample in TimedStepInterpolator::new(interval).unwrap() {
-            assert!(sample.tick > previous_tick && sample.tick <= end);
+            assert_eq!(sample.tick, previous_tick + tick_spacing);
+            assert!(sample.tick <= end);
             if sample.event.first_step {
                 reached.first += signed_pulse(movement.first().direction);
             }

@@ -28,7 +28,7 @@ impl TimedStepInterpolator {
             .max(interval.movement().second().pulses);
         let duration_ticks = interval.duration_ticks();
 
-        if total_events >= duration_ticks {
+        if total_events > duration_ticks {
             return Err(PlannerError::InsufficientTicksForSteps);
         }
 

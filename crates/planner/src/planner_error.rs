@@ -37,6 +37,7 @@ pub enum PlannerError {
     InsufficientPoints,
     DiscontinuousJointVelocity,
     ProfileInstanceNotFound,
+    InvalidSteps,
 }
 
 impl PlannerError {

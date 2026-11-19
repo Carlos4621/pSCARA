@@ -57,3 +57,6 @@ mod coordinated_joint_trajectory;
 pub use coordinated_joint_trajectory::{
     CoordinatedJointSample, CoordinatedJointTrajectory, CoordinatedJointTrajectoryCursor,
 };
+
+mod joint_to_steps_converter;
+pub use joint_to_steps_converter::{JointToStepsConverter, MotorSteps};

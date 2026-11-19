@@ -200,33 +200,41 @@ fn a_sampling_failure_in_the_cursor_is_forwarded_and_can_be_retried() {
 }
 
 #[test]
-fn a_step_conversion_failure_leaves_the_cursor_at_the_sampled_time() {
+fn a_step_conversion_failure_still_records_the_tick_sampled_by_the_cursor() {
     let points = [[0.0, 0.0], [1.0, 0.0], [0.0, 0.0]].map(angles);
     let velocity = JointVelocityLimits::new(10.0, 10.0).unwrap();
-    let acceleration = JointAccelerationLimits::new(1.0, 1.0).unwrap();
+    let acceleration = JointAccelerationLimits::new(4.0, 4.0).unwrap();
     let calibration = (1_u64 << 63) as f64;
+    let tick_rate = 1_u64 << 54;
+    let failing_tick = tick_rate + 1;
+    let timebase = StepTimeBase::new(tick_rate).unwrap();
+    assert_eq!(timebase.ticks_to_seconds(failing_tick), 1.0);
+    assert_eq!(timebase.ticks_to_seconds(tick_rate), 1.0);
     let mut sampler = sampler(
         timed_path(&points, &[0.0; 3], &velocity, &acceleration),
-        1,
+        tick_rate,
         [calibration, 1.0],
     );
 
     assert_eq!(sampler.sample_at_tick(0), Ok(steps(0, 0)));
-    // The cursor samples angle 1 at tick 2, but the resulting 2^63 steps do not fit in i64.
+    // The cursor samples angle 1, but the resulting 2^63 steps do not fit in i64.
     assert_eq!(
-        sampler.sample_at_tick(2),
+        sampler.sample_at_tick(failing_tick),
         Err(PlannerError::NumericalFailure)
     );
     assert_eq!(
-        sampler.sample_at_tick(2),
-        Err(PlannerError::NumericalFailure)
-    );
-    assert_eq!(
-        sampler.sample_at_tick(1),
+        sampler.sample_at_tick(tick_rate),
         Err(PlannerError::TimeWentBackwards)
     );
-    assert_eq!(sampler.sample_at_tick(3), Ok(steps(1_i64 << 62, 0)));
-    assert_eq!(sampler.sample_at_tick(4), Ok(steps(0, 0)));
+    assert_eq!(
+        sampler.sample_at_tick(failing_tick),
+        Err(PlannerError::NumericalFailure)
+    );
+    assert_eq!(
+        sampler.sample_at_tick(3 * tick_rate / 2),
+        Ok(steps(1_i64 << 62, 0))
+    );
+    assert_eq!(sampler.sample_at_tick(2 * tick_rate), Ok(steps(0, 0)));
 }
 
 #[test]
@@ -250,23 +258,59 @@ fn the_signed_step_limit_is_checked_for_the_second_axis_as_well() {
 }
 
 #[test]
-fn adjacent_large_ticks_can_share_the_same_cursor_time() {
+fn adjacent_ticks_are_ordered_even_when_they_round_to_the_same_seconds() {
     let points = [[0.0, 0.0], [1.0, -0.5]].map(angles);
     let velocity = JointVelocityLimits::new(10.0, 10.0).unwrap();
     let acceleration = JointAccelerationLimits::new(1.0, 1.0).unwrap();
     let tick_rate = 1_u64 << 54;
+    let timebase = StepTimeBase::new(tick_rate).unwrap();
+    assert_eq!(timebase.ticks_to_seconds(tick_rate), 1.0);
+    assert_eq!(timebase.ticks_to_seconds(tick_rate + 1), 1.0);
     let mut sampler = sampler(
         timed_path(&points, &[0.0; 2], &velocity, &acceleration),
         tick_rate,
         [8.0, 16.0],
     );
 
-    // Both ticks convert to 1.0 seconds. The cursor orders those converted times.
-    assert_eq!(sampler.sample_at_tick(tick_rate + 1), Ok(steps(4, -4)));
     assert_eq!(sampler.sample_at_tick(tick_rate), Ok(steps(4, -4)));
+    assert_eq!(sampler.sample_at_tick(tick_rate + 1), Ok(steps(4, -4)));
+    assert_eq!(
+        sampler.sample_at_tick(tick_rate),
+        Err(PlannerError::TimeWentBackwards)
+    );
     assert_eq!(
         sampler.sample_at_tick(tick_rate - 4),
         Err(PlannerError::TimeWentBackwards)
     );
+    assert_eq!(sampler.sample_at_tick(tick_rate + 1), Ok(steps(4, -4)));
     assert_eq!(sampler.sample_at_tick(2 * tick_rate), Ok(steps(8, -8)));
+}
+
+#[test]
+fn the_tick_order_uses_the_full_unsigned_range() {
+    let points = [[0.0, 0.0], [1.0, -0.5]].map(angles);
+    let velocity = JointVelocityLimits::new(10.0, 10.0).unwrap();
+    let acceleration = JointAccelerationLimits::new(1.0, 1.0).unwrap();
+    let mut sampler = sampler(
+        timed_path(&points, &[0.0; 2], &velocity, &acceleration),
+        u64::MAX,
+        [8.0, 16.0],
+    );
+
+    let signed_boundary = 1_u64 << 63;
+    assert_eq!(
+        sampler.sample_at_tick(signed_boundary - 1),
+        Ok(steps(1, -1))
+    );
+    assert_eq!(sampler.sample_at_tick(signed_boundary), Ok(steps(1, -1)));
+    assert_eq!(
+        sampler.sample_at_tick(signed_boundary - 1),
+        Err(PlannerError::TimeWentBackwards)
+    );
+    assert_eq!(sampler.sample_at_tick(u64::MAX), Ok(steps(4, -4)));
+    assert_eq!(
+        sampler.sample_at_tick(u64::MAX - 1),
+        Err(PlannerError::TimeWentBackwards)
+    );
+    assert_eq!(sampler.sample_at_tick(u64::MAX), Ok(steps(4, -4)));
 }

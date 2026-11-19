@@ -78,3 +78,6 @@ pub use motor_step_interval::MotorStepInterval;
 
 mod timed_step_interpolator;
 pub use timed_step_interpolator::{TimedStepEvent, TimedStepInterpolator};
+
+mod step_transition_detector;
+pub use step_transition_detector::StepTransitionDetector;

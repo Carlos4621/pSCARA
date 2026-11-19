@@ -22,6 +22,8 @@ pub enum PlannerError {
     TimeElapsedOverflow,
     /// El redondeo borró un operando positivo al sumar tiempos.
     TimeElapsedPrecisionLost,
+    /// El cursor de ejecución recibió un tiempo anterior al último válido.
+    TimeWentBackwards,
     InvalidJointAcceleration,
     InvalidMaxVelocity,
     InvalidMaxAcceleration,

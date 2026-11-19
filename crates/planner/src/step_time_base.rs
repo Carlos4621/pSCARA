@@ -6,8 +6,12 @@ pub struct StepTimeBase {
 }
 
 impl StepTimeBase {
-    pub fn new(ticks_per_second: u64) -> Self {
-        Self { ticks_per_second }
+    pub fn new(ticks_per_second: u64) -> Result<Self, PlannerError> {
+        if ticks_per_second == 0 {
+            return Err(PlannerError::InvalidTicks);
+        }
+
+        Ok(Self { ticks_per_second })
     }
 
     /// Convierte el valor exacto de `seconds` al tick más cercano.

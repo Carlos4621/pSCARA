@@ -48,14 +48,11 @@ where
         }
     }
 
-    let movement =         MotorStepMove::new(initial_position, right_position);
+    let movement = MotorStepMove::new(initial_position, right_position);
 
     if movement.first().pulses > 1 || movement.second().pulses > 1 {
         return Err(PlannerError::MultipleStepsOnTick);
     }
 
-    Ok(Some((
-        right,
-        movement,
-    )))
+    Ok(Some((right, movement)))
 }

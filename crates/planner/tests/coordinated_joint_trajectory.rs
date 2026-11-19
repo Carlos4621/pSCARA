@@ -27,6 +27,20 @@ fn position(trajectory: &CoordinatedJointTrajectory<'_>, time: f64) -> Result<Pa
         .map(|q| [q.first_theta(), q.second_theta()])
 }
 
+fn assert_query_error(trajectory: &CoordinatedJointTrajectory<'_>, time: f64, error: PlannerError) {
+    assert_eq!(position(trajectory, time), Err(error), "position at {time}");
+    assert_eq!(
+        trajectory.velocity_at(time),
+        Err(error),
+        "velocity at {time}"
+    );
+    assert_eq!(
+        trajectory.acceleration_at(time),
+        Err(error),
+        "acceleration at {time}"
+    );
+}
+
 #[test]
 fn one_segment_accepts_signed_zero_and_both_endpoints() {
     let points = [[2.0, -1.0], [6.0, -3.0]].map(angles);
@@ -37,13 +51,16 @@ fn one_segment_accepts_signed_zero_and_both_endpoints() {
 
     for time in [0.0, -0.0, f64::from_bits(1)] {
         assert_eq!(position(&trajectory, time), Ok([2.0, -1.0]));
+        assert_eq!(trajectory.velocity_at(time), Ok((4.0 * time, -2.0 * time)));
+        assert_eq!(trajectory.acceleration_at(time), Ok((4.0, -2.0)));
     }
     assert_eq!(position(&trajectory, 1.0), Ok([4.0, -2.0]));
     assert_eq!(position(&trajectory, 2.0), Ok([6.0, -3.0]));
-    assert_eq!(
-        position(&trajectory, 2.0_f64.next_up()),
-        Err(PlannerError::InvalidTime)
-    );
+    assert_eq!(trajectory.velocity_at(2.0), Ok((0.0, 0.0)));
+    assert_eq!(trajectory.acceleration_at(2.0), Ok((-4.0, 2.0)));
+    for time in [2.0_f64.next_up(), f64::MAX] {
+        assert_query_error(&trajectory, time, PlannerError::InvalidTime);
+    }
 }
 
 #[test]
@@ -55,19 +72,25 @@ fn repeated_queries_can_move_across_the_path_in_either_direction() {
     let trajectory = CoordinatedJointTrajectory::new(timed).unwrap();
 
     // The triangular, trapezoidal and triangular segments take 4, 8 and 6.
-    for (time, expected) in [
-        (18.0, [-5.0, -14.0]),
-        (0.0, [0.0, 0.0]),
-        (8.0, [4.0, -8.0]),
-        (4.0, [4.0, -2.0]),
-        (15.0, [-0.5, -14.0]),
-        (2.0, [2.0, -1.0]),
-        (12.0, [4.0, -14.0]),
-        (5.0, [4.0, -2.5]),
-        (11.0, [4.0, -13.5]),
-        (8.0, [4.0, -8.0]),
+    for (time, expected, velocity, acceleration) in [
+        (18.0, [-5.0, -14.0], (0.0, 0.0), (1.0, 0.0)),
+        (0.0, [0.0, 0.0], (0.0, 0.0), (1.0, -0.5)),
+        (8.0, [4.0, -8.0], (0.0, -2.0), (0.0, 0.0)),
+        (4.0, [4.0, -2.0], (0.0, 0.0), (-1.0, 0.5)),
+        (15.0, [-0.5, -14.0], (-3.0, 0.0), (-1.0, 0.0)),
+        (2.0, [2.0, -1.0], (2.0, -1.0), (1.0, -0.5)),
+        (12.0, [4.0, -14.0], (0.0, 0.0), (0.0, 1.0)),
+        (5.0, [4.0, -2.5], (0.0, -1.0), (0.0, -1.0)),
+        (11.0, [4.0, -13.5], (0.0, -1.0), (0.0, 1.0)),
+        (8.0, [4.0, -8.0], (0.0, -2.0), (0.0, 0.0)),
     ] {
         assert_eq!(position(&trajectory, time), Ok(expected), "time={time}");
+        assert_eq!(trajectory.velocity_at(time), Ok(velocity), "time={time}");
+        assert_eq!(
+            trajectory.acceleration_at(time),
+            Ok(acceleration),
+            "time={time}"
+        );
     }
 }
 
@@ -94,6 +117,22 @@ fn composing_with_the_speed_planner_preserves_moving_junctions_and_stops() {
     ] {
         assert_eq!(position(&trajectory, time), Ok(expected), "time={time}");
     }
+    for (time, velocity, left_acceleration, right_acceleration) in [
+        (1.0_f64, (2.0, 0.0), (2.0, 0.0), (-2.0, 0.0)),
+        (2.0, (0.0, 0.0), (-2.0, 0.0), (0.0, 2.0)),
+        (3.0, (0.0, 2.0), (0.0, 2.0), (0.0, -2.0)),
+    ] {
+        assert_eq!(trajectory.velocity_at(time), Ok(velocity));
+        assert_eq!(
+            trajectory.acceleration_at(time.next_down()),
+            Ok(left_acceleration)
+        );
+        assert_eq!(trajectory.acceleration_at(time), Ok(left_acceleration));
+        assert_eq!(
+            trajectory.acceleration_at(time.next_up()),
+            Ok(right_acceleration)
+        );
+    }
 }
 
 #[test]
@@ -106,22 +145,24 @@ fn a_partly_consumed_timed_path_keeps_the_original_clock_and_has_no_prefix() {
     let trajectory = CoordinatedJointTrajectory::new(timed).unwrap();
 
     for time in [0.0, 1.0, 2.0_f64.next_down()] {
-        assert_eq!(
-            position(&trajectory, time),
-            Err(PlannerError::ProfileInstanceNotFound)
-        );
+        assert_query_error(&trajectory, time, PlannerError::ProfileInstanceNotFound);
     }
-    for (time, expected) in [(2.0, 1.0), (4.0, 3.0), (6.0, 5.0), (9.0, 9.5), (12.0, 14.0)] {
+    for (time, expected, velocity, acceleration) in [
+        (2.0, 1.0, 0.0, 1.0),
+        (4.0, 3.0, 2.0, 1.0),
+        (6.0, 5.0, 0.0, -1.0),
+        (9.0, 9.5, 3.0, 1.0),
+        (12.0, 14.0, 0.0, -1.0),
+    ] {
         assert_eq!(position(&trajectory, time), Ok([expected, 0.0]));
+        assert_eq!(trajectory.velocity_at(time), Ok((velocity, 0.0)));
+        assert_eq!(trajectory.acceleration_at(time), Ok((acceleration, 0.0)));
     }
-    assert_eq!(
-        position(&trajectory, 12.0_f64.next_up()),
-        Err(PlannerError::InvalidTime)
-    );
+    assert_query_error(&trajectory, 12.0_f64.next_up(), PlannerError::InvalidTime);
 }
 
 #[test]
-fn an_exhausted_timed_path_has_no_position_at_zero() {
+fn an_exhausted_timed_path_has_no_profile_at_zero() {
     let points = [[0.0, 0.0], [1.0, 0.0]].map(angles);
     let velocity = JointVelocityLimits::new(10.0, 10.0).unwrap();
     let acceleration = JointAccelerationLimits::new(1.0, 1.0).unwrap();
@@ -131,15 +172,10 @@ fn an_exhausted_timed_path_has_no_position_at_zero() {
     let trajectory = CoordinatedJointTrajectory::new(timed).unwrap();
 
     for time in [0.0, -0.0] {
-        assert_eq!(
-            position(&trajectory, time),
-            Err(PlannerError::ProfileInstanceNotFound)
-        );
+        assert_query_error(&trajectory, time, PlannerError::ProfileInstanceNotFound);
     }
-    assert_eq!(
-        position(&trajectory, f64::from_bits(1)),
-        Err(PlannerError::InvalidTime)
-    );
+    assert_query_error(&trajectory, f64::from_bits(1), PlannerError::InvalidTime);
+    assert_query_error(&trajectory, f64::NAN, PlannerError::InvalidTime);
 }
 
 #[test]
@@ -151,12 +187,24 @@ fn very_large_representable_times_keep_their_segment_boundaries() {
     let trajectory = CoordinatedJointTrajectory::new(timed).unwrap();
 
     let duration = libm::scalbn(1.0, 1022);
-    for x in [0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0] {
-        assert_eq!(position(&trajectory, x * duration), Ok([x, 0.0]));
+    for (x, velocity, acceleration) in [
+        (0.0, 0.0, 1.0),
+        (0.5, f64::MIN_POSITIVE, 0.0),
+        (1.0, 0.0, -1.0),
+        (1.5, f64::MIN_POSITIVE, 0.0),
+        (2.0, 0.0, -1.0),
+        (2.5, f64::MIN_POSITIVE, 0.0),
+        (3.0, 0.0, -1.0),
+    ] {
+        let time = x * duration;
+        assert_eq!(position(&trajectory, time), Ok([x, 0.0]));
+        assert_eq!(trajectory.velocity_at(time), Ok((velocity, 0.0)));
+        assert_eq!(trajectory.acceleration_at(time), Ok((acceleration, 0.0)));
     }
-    assert_eq!(
-        position(&trajectory, (3.0 * duration).next_up()),
-        Err(PlannerError::InvalidTime)
+    assert_query_error(
+        &trajectory,
+        (3.0 * duration).next_up(),
+        PlannerError::InvalidTime,
     );
 }
 
@@ -174,10 +222,14 @@ fn one_ulp_in_global_time_is_enough_to_reach_the_exact_final_position() {
     let end = junction.next_up();
     assert_eq!(position(&trajectory, junction), Ok([distance, 0.0]));
     assert_eq!(position(&trajectory, end), Ok([distance, 1.0]));
+    assert_eq!(trajectory.velocity_at(junction), Ok((0.0, 0.0)));
+    assert_eq!(trajectory.acceleration_at(junction), Ok((-1.0, 0.0)));
+    assert_eq!(trajectory.velocity_at(end), Ok((0.0, 0.0)));
     assert_eq!(
-        position(&trajectory, end.next_up()),
-        Err(PlannerError::InvalidTime)
+        trajectory.acceleration_at(end),
+        Ok((0.0, -libm::scalbn(1.0, 108)))
     );
+    assert_query_error(&trajectory, end.next_up(), PlannerError::InvalidTime);
 }
 
 #[test]
@@ -188,11 +240,9 @@ fn negative_finite_times_are_invalid() {
     let timed = timed_path(&points, &[0.0; 2], &velocity, &acceleration);
     let trajectory = CoordinatedJointTrajectory::new(timed).unwrap();
 
-    let times = [-f64::from_bits(1), -1.0, -f64::MAX];
-    assert_eq!(
-        times.map(|t| position(&trajectory, t)),
-        [Err(PlannerError::InvalidTime); 3]
-    );
+    for time in [-f64::from_bits(1), -1.0, -f64::MAX] {
+        assert_query_error(&trajectory, time, PlannerError::InvalidTime);
+    }
 }
 
 #[test]
@@ -203,9 +253,63 @@ fn nonfinite_times_are_invalid() {
     let timed = timed_path(&points, &[0.0; 2], &velocity, &acceleration);
     let trajectory = CoordinatedJointTrajectory::new(timed).unwrap();
 
-    let times = [f64::NAN, f64::NEG_INFINITY, f64::INFINITY];
-    assert_eq!(
-        times.map(|t| position(&trajectory, t)),
-        [Err(PlannerError::InvalidTime); 3]
+    for time in [f64::NAN, f64::NEG_INFINITY, f64::INFINITY] {
+        assert_query_error(&trajectory, time, PlannerError::InvalidTime);
+    }
+}
+
+#[test]
+fn a_moving_suffix_uses_its_first_segment_at_the_original_junction() {
+    let points = [[0.0, 0.0], [1.0, 0.0], [2.0, 0.0]].map(angles);
+    let velocity = JointVelocityLimits::new(10.0, 10.0).unwrap();
+    let acceleration = JointAccelerationLimits::new(2.0, 2.0).unwrap();
+    let mut timed = timed_path(&points, &[0.0, 2.0, 0.0], &velocity, &acceleration);
+    let full = CoordinatedJointTrajectory::new(timed).unwrap();
+    let junction = timed.next().unwrap().unwrap().end_time().unwrap();
+    let suffix = CoordinatedJointTrajectory::new(timed).unwrap();
+
+    assert_eq!(junction, 1.0);
+    assert_query_error(
+        &suffix,
+        junction.next_down(),
+        PlannerError::ProfileInstanceNotFound,
     );
+    for trajectory in [&full, &suffix] {
+        assert_eq!(position(trajectory, junction), Ok([1.0, 0.0]));
+        assert_eq!(trajectory.velocity_at(junction), Ok((2.0, 0.0)));
+    }
+    assert_eq!(full.acceleration_at(junction), Ok((2.0, 0.0)));
+    assert_eq!(suffix.acceleration_at(junction), Ok((-2.0, 0.0)));
+    assert_eq!(suffix.velocity_at(2.0), Ok((0.0, 0.0)));
+}
+
+#[test]
+fn derivatives_match_centered_differences_inside_later_segments() {
+    let points = [[0.0, 0.0], [4.0, -2.0], [4.0, -14.0], [-5.0, -14.0]].map(angles);
+    let velocity = JointVelocityLimits::new(4.0, 2.0).unwrap();
+    let acceleration = JointAccelerationLimits::new(1.0, 1.0).unwrap();
+    let timed = timed_path(&points, &[0.0; 4], &velocity, &acceleration);
+    let trajectory = CoordinatedJointTrajectory::new(timed).unwrap();
+
+    // These samples are inside the ramps and cruise, away from any transition.
+    let h = 1.0 / 1024.0;
+    for time in [5.0, 8.0, 11.0, 13.0, 17.0] {
+        let before = position(&trajectory, time - h).unwrap();
+        let after = position(&trajectory, time + h).unwrap();
+        let (v_before_1, v_before_2) = trajectory.velocity_at(time - h).unwrap();
+        let (v_after_1, v_after_2) = trajectory.velocity_at(time + h).unwrap();
+        let (v1, v2) = trajectory.velocity_at(time).unwrap();
+        let (a1, a2) = trajectory.acceleration_at(time).unwrap();
+        for (expected, finite_difference) in [
+            (v1, (after[0] - before[0]) / (2.0 * h)),
+            (v2, (after[1] - before[1]) / (2.0 * h)),
+            (a1, (v_after_1 - v_before_1) / (2.0 * h)),
+            (a2, (v_after_2 - v_before_2) / (2.0 * h)),
+        ] {
+            assert!(
+                (expected - finite_difference).abs() <= 1e-10,
+                "t={time}: {expected} vs {finite_difference}"
+            );
+        }
+    }
 }

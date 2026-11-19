@@ -4,8 +4,8 @@ use kinematics::JointAngles;
 
 use super::TimedCoordinatedJointPathProfiles;
 use crate::{
-    CoordinatedJointPathProfiles, JointAccelerationLimits, JointVelocityLimits, PlannerError,
-    plan_joint_path_speeds,
+    CoordinatedJointPathProfiles, CoordinatedJointTrajectory, JointAccelerationLimits,
+    JointVelocityLimits, PlannerError, plan_joint_path_speeds,
 };
 
 fn angles([first, second]: [f64; 2]) -> JointAngles {
@@ -234,6 +234,10 @@ fn next_reports_a_timing_error_once_and_preserves_the_last_time() {
         // Construction normally detects these errors. Seed the clock to
         // exercise the defensive iterator path with another segment pending.
         timed.elapsed_time = elapsed;
+        assert_eq!(
+            CoordinatedJointTrajectory::new(timed).unwrap_err(),
+            expected
+        );
         assert_eq!(timed.next().unwrap().unwrap_err(), expected);
         assert_eq!(timed.elapsed_time, elapsed);
         assert_eq!(timed.profiles.len(), 1);

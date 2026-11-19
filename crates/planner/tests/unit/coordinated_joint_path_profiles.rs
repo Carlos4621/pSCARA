@@ -1,5 +1,5 @@
 use super::*;
-use crate::timed_coordinated_joint_path_profiles::TimedCoordinatedJointPathProfiles;
+use crate::{CoordinatedJointTrajectory, TimedCoordinatedJointPathProfiles};
 
 fn angles(first: f64) -> JointAngles {
     JointAngles::new(first, 0.0).unwrap()
@@ -140,7 +140,7 @@ fn total_path_time_and_timed_constructor_propagate_upstream_errors() {
 }
 
 #[test]
-fn timed_iterator_stops_when_a_segment_from_the_source_fails() {
+fn trajectory_construction_and_timed_iteration_report_a_late_source_error() {
     let points = [0.0, 1.0, 1.0, 3.0].map(angles);
     let speeds = [0.0; 4];
     let vl = JointVelocityLimits::new(10.0, 10.0).unwrap();
@@ -155,6 +155,10 @@ fn timed_iterator_stops_when_a_segment_from_the_source_fails() {
     };
 
     let mut timed = TimedCoordinatedJointPathProfiles::from_unvalidated_source_for_test(profiles);
+    assert_eq!(
+        CoordinatedJointTrajectory::new(timed).unwrap_err(),
+        PlannerError::ZeroDisplacementMotion
+    );
     let first = timed.next().unwrap().unwrap();
     assert_eq!(first.start_time(), 0.0);
     assert_eq!(first.end_time(), Ok(2.0));

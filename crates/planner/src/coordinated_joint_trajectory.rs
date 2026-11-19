@@ -89,7 +89,6 @@ pub struct CoordinatedJointTrajectoryCursor<'a> {
 }
 
 impl<'a> CoordinatedJointTrajectoryCursor<'a> {
-    /// Crea un cursor desde una trayectoria previamente validada, sin asignar memoria.
     pub fn new(trajectory: CoordinatedJointTrajectory<'a>) -> Self {
         Self {
             profiles: trajectory.profiles,
@@ -99,15 +98,10 @@ impl<'a> CoordinatedJointTrajectoryCursor<'a> {
         }
     }
 
-    /// Instante final global de los perfiles presentes en la trayectoria.
     pub fn end_time(&self) -> f64 {
         self.end_time
     }
 
-    /// Obtiene posicion, velocidad y aceleracion con tiempo global creciente.
-    ///
-    /// Se rechazan tiempos menores que el ultimo consultado exitosamente.
-    /// Una consulta fallida no consume perfiles ni modifica el reloj.
     pub fn sample_at(
         &mut self,
         global_time: f64,
@@ -123,7 +117,6 @@ impl<'a> CoordinatedJointTrajectoryCursor<'a> {
             return Err(PlannerError::TimeWentBackwards);
         }
 
-        // Consultas dentro del mismo segmento: no se recorre el iterador.
         if let Some(profile) = self.current_profile.as_ref() {
             if global_time < profile.start_time() {
                 return Err(PlannerError::ProfileInstanceNotFound);
@@ -136,7 +129,6 @@ impl<'a> CoordinatedJointTrajectoryCursor<'a> {
             }
         }
 
-        // Trabajar con una copia permite conservar el estado ante errores.
         let mut remaining = self.profiles;
         while let Some(next_profile) = remaining.next() {
             let profile = next_profile?;

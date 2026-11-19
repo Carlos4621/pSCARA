@@ -40,6 +40,7 @@ pub enum PlannerError {
     InvalidSteps,
     InvalidTicks,
     EndBeforeStart,
+    InsufficientTicksForSteps,
 }
 
 impl PlannerError {

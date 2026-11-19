@@ -75,3 +75,6 @@ pub use motor_position_sampler::MotorPositionSampler;
 
 mod motor_step_interval;
 pub use motor_step_interval::MotorStepInterval;
+
+mod timed_step_interpolator;
+pub use timed_step_interpolator::{TimedStepEvent, TimedStepInterpolator};

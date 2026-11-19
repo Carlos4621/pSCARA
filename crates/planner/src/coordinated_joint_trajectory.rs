@@ -138,7 +138,7 @@ impl<'a> CoordinatedJointTrajectoryCursor<'a> {
 
         // Trabajar con una copia permite conservar el estado ante errores.
         let mut remaining = self.profiles;
-        for next_profile in &mut remaining {
+        while let Some(next_profile) = remaining.next() {
             let profile = next_profile?;
 
             if global_time < profile.start_time() {

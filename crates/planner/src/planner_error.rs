@@ -39,6 +39,7 @@ pub enum PlannerError {
     ProfileInstanceNotFound,
     InvalidSteps,
     InvalidTicks,
+    EndBeforeStart,
 }
 
 impl PlannerError {

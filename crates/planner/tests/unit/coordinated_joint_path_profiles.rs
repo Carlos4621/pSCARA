@@ -1,4 +1,5 @@
 use super::*;
+use crate::timed_coordinated_joint_path_profiles::TimedCoordinatedJointPathProfiles;
 
 fn angles(first: f64) -> JointAngles {
     JointAngles::new(first, 0.0).unwrap()
@@ -88,7 +89,7 @@ fn an_error_on_the_final_segment_is_followed_by_permanent_exhaustion() {
 }
 
 #[test]
-fn total_path_time_propagates_upstream_errors_without_reclassifying_them() {
+fn total_path_time_and_timed_constructor_propagate_upstream_errors() {
     // These private fixtures exercise errors that new would reject up front.
     for (coordinates, speeds, expected) in [
         (
@@ -130,6 +131,10 @@ fn total_path_time_propagates_upstream_errors_without_reclassifying_them() {
         assert_eq!(
             CoordinatedJointPathProfiles::total_path_time(profiles),
             Err(expected)
+        );
+        assert_eq!(
+            TimedCoordinatedJointPathProfiles::new(profiles).unwrap_err(),
+            expected
         );
     }
 }

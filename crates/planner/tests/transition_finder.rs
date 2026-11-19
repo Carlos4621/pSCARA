@@ -46,7 +46,7 @@ fn finds_every_possible_first_change_in_short_intervals() {
     let start = 41;
     let initial = steps(7, -5);
     let first_change = steps(7, -4);
-    let later_position = steps(6, -5);
+    let later_position = steps(6, -3);
 
     for width in 1..=40 {
         let end = start + width;
@@ -72,9 +72,9 @@ fn finds_every_possible_first_change_in_short_intervals() {
 }
 
 #[test]
-fn reports_signed_displacements_on_both_axes_at_the_first_change() {
+fn accepts_one_pulse_on_each_axis_at_the_same_tick() {
     let initial = steps(i64::MAX, i64::MIN);
-    let target = steps(i64::MIN, i64::MAX);
+    let target = steps(i64::MAX - 1, i64::MIN + 1);
     let (tick, movement) = find_first_transition_tick(u64::MAX - 1, u64::MAX, initial, |tick| {
         assert_eq!(tick, u64::MAX);
         Ok(target)
@@ -87,16 +87,69 @@ fn reports_signed_displacements_on_both_axes_at_the_first_change() {
         movement.first(),
         AxisStepMove {
             direction: StepDirection::Negative,
-            pulses: u64::MAX,
+            pulses: 1,
         }
     );
     assert_eq!(
         movement.second(),
         AxisStepMove {
             direction: StepDirection::Positive,
-            pulses: u64::MAX,
+            pulses: 1,
         }
     );
+}
+
+#[test]
+fn rejects_two_pulses_on_either_axis_in_either_direction() {
+    let initial = steps(7, -5);
+    for target in [
+        steps(9, -5),
+        steps(5, -5),
+        steps(7, -3),
+        steps(7, -7),
+        steps(9, -6),
+        steps(6, -3),
+        steps(9, -7),
+    ] {
+        for transition in [11, 14, 18] {
+            let actual = find_first_transition_tick(10, 18, initial, |tick| {
+                Ok(if tick < transition { initial } else { target })
+            });
+            assert_eq!(
+                actual,
+                Err(PlannerError::MultipleStepsOnTick),
+                "transition={transition}, target={target:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn rejects_a_large_first_change_even_if_the_final_displacement_is_one_pulse() {
+    let initial = steps(0, 0);
+    let actual = find_first_transition_tick(10, 16, initial, |tick| {
+        Ok(match tick {
+            11..=13 => initial,
+            14 => steps(2, 0),
+            15..=16 => steps(1, 0),
+            _ => unreachable!(),
+        })
+    });
+    assert_eq!(actual, Err(PlannerError::MultipleStepsOnTick));
+}
+
+#[test]
+fn rejects_jumps_between_extreme_positions_without_overflow() {
+    for (initial, target) in [
+        (steps(i64::MIN, 0), steps(i64::MAX, 0)),
+        (steps(0, i64::MAX), steps(0, i64::MIN)),
+        (steps(i64::MAX, i64::MIN), steps(i64::MIN, i64::MAX)),
+    ] {
+        assert_eq!(
+            find_first_transition_tick(u64::MAX - 1, u64::MAX, initial, |_| Ok(target)),
+            Err(PlannerError::MultipleStepsOnTick)
+        );
+    }
 }
 
 #[test]

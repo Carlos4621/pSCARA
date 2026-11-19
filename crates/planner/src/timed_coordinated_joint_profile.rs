@@ -9,16 +9,17 @@ pub struct TimedCoordinatedJointProfile {
 }
 
 impl TimedCoordinatedJointProfile {
+    /// Crea un perfil y valida que su instante final sea representable.
     pub fn new(
         start_time: f64,
         profile: CoordinatedJointMotionProfile,
     ) -> Result<Self, PlannerError> {
-        utilities::validate_finite_positive(start_time).map_err(|_| PlannerError::InvalidTime)?;
-
-        Ok(Self {
+        let timed = Self {
             start_time,
             profile,
-        })
+        };
+        timed.end_time()?;
+        Ok(timed)
     }
 
     pub fn start_time(&self) -> f64 {
@@ -26,21 +27,8 @@ impl TimedCoordinatedJointProfile {
     }
 
     pub fn end_time(&self) -> Result<f64, PlannerError> {
-        let duration = self.profile.total_time();
-        utilities::validate_finite_positive(duration).map_err(|_| PlannerError::InvalidTime)?;
-
-        let end_time = self.start_time + duration;
-        utilities::validate_finite_positive(end_time)
-            .map_err(|_| PlannerError::TimeElapsedOverflow)?;
-
-        if self.start_time > 0.0
-            && duration > 0.0
-            && (end_time == self.start_time || end_time == duration)
-        {
-            return Err(PlannerError::TimeElapsedPrecisionLost);
-        }
-
-        Ok(end_time)
+        utilities::checked_time_sumatory(&[self.start_time, self.profile.total_time()])
+            .map_err(PlannerError::from_time_error)
     }
 
     pub fn position_at(&self, global_time: f64) -> Result<JointAngles, PlannerError> {

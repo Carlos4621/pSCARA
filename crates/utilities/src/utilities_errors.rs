@@ -1,4 +1,4 @@
-/// Errores de validación de los valores `f64`.
+/// Errores de validación de valores `f64` y de acumulación de tiempos.
 ///
 /// Los validadores comprueban primero la finitud y después el signo: NaN y
 /// ambos infinitos siempre producen [`Self::NonFiniteF64`]. Los errores de signo
@@ -13,4 +13,10 @@ pub enum UtilitiesErrors {
     NonNegativeF64,
     NonZeroFiniteF64,
     NonZeroFinitePositiveF64,
+    /// Un tiempo de entrada es negativo o no finito.
+    InvalidTime,
+    /// Un operando positivo se perdió por redondeo durante la suma de tiempos.
+    TimePrecisionLost,
+    /// La suma de tiempos válidos excedió el rango finito.
+    TimeOverflow,
 }

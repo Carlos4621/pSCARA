@@ -158,6 +158,33 @@ fn a_positive_duration_absorbed_by_the_clock_returns_precision_lost() {
 }
 
 #[test]
+fn a_duration_that_absorbs_the_previous_time_preserves_the_committed_state() {
+    let robot = Scara::new(0.5, 0.5).unwrap();
+    let path = LineSegment::new(
+        Point::new(1.0, 0.0).unwrap(),
+        Point::new(1.0, f64::EPSILON).unwrap(),
+    )
+    .expect("test segment must have a finite length");
+    for configuration in configurations() {
+        let mut timed = timed(&robot, &path, 1.0, configuration);
+        let first = timed.next().unwrap().unwrap();
+        let end = robot.inverse(path.end(), configuration).unwrap();
+        let delta = timed
+            .velocity_limits
+            .min_duration_between(first.angle, end)
+            .unwrap();
+        assert_eq!(delta, f64::EPSILON);
+        let previous_time = f64::from_bits(1);
+        assert_eq!(previous_time + delta, delta);
+        timed.time_elapsed = previous_time;
+        assert_error_preserves_state_and_finishes(
+            &mut timed,
+            PlannerError::TimeElapsedPrecisionLost,
+        );
+    }
+}
+
+#[test]
 fn neighbouring_durations_around_half_an_ulp_are_classified_correctly() {
     let robot = Scara::new(0.5, 0.5).unwrap();
     let path = LineSegment::new(

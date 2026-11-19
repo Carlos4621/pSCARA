@@ -267,16 +267,21 @@ fn a_positive_duration_absorbed_by_a_large_total_returns_precision_lost() {
 }
 
 #[test]
-fn a_small_duration_before_a_large_one_still_advances_the_clock() {
-    let expected = libm::scalbn(1.0, 1022);
+fn a_large_duration_that_absorbs_the_previous_total_returns_precision_lost() {
+    let points = [[1.0, 1.0], [1.0, 0.0], [0.0, 0.0]].map(angles);
+    let speeds = [0.0; 3];
+    let vl = JointVelocityLimits::new(f64::MIN_POSITIVE, 1.0).unwrap();
+    let al = JointAccelerationLimits::new(1.0, 1.0).unwrap();
+    let mut reference = CoordinatedJointPathProfiles::new(&points, &speeds, &vl, &al).unwrap();
+    let first = reference.next().unwrap().unwrap().total_time();
+    let second = reference.next().unwrap().unwrap().total_time();
+    assert_eq!(first, 2.0);
+    assert_eq!(second, libm::scalbn(1.0, 1022));
+    assert_eq!(first + second, second);
+    let profiles = CoordinatedJointPathProfiles::new(&points, &speeds, &vl, &al).unwrap();
     assert_eq!(
-        total(
-            [[1.0, 1.0], [1.0, 0.0], [0.0, 0.0]],
-            [0.0; 3],
-            [f64::MIN_POSITIVE, 1.0],
-            [1.0; 2]
-        ),
-        Ok(expected)
+        profiles.total_path_time(),
+        Err(PlannerError::TimeElapsedPrecisionLost)
     );
 }
 

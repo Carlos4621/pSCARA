@@ -1,8 +1,8 @@
 #![no_std]
 
-//! Validación de valores `f64` sin depender de `std` ni asignar memoria.
+//! Validación de valores `f64` y acumulación de tiempos sin asignar memoria.
 //!
-//! Las funciones devuelven `Ok(())` cuando la entrada satisface la condición,
+//! Los validadores devuelven `Ok(())` cuando la entrada satisface la condición,
 //! o un [`UtilitiesErrors`] que indica el motivo del rechazo. No convierten
 //! ni almacenan el número, y no validan automáticamente operaciones posteriores.
 //!
@@ -11,6 +11,9 @@
 //! admiten, respectivamente, valores mayores o iguales a cero y menores o
 //! iguales a cero. Ambos ceros con signo son válidos en estos tres validadores.
 //! La finitud se comprueba antes que el signo.
+//!
+//! [`checked_time_sumatory`] comprueba que cada suma de tiempos sea finita y
+//! conserve una contribución de cada operando positivo.
 //!
 //! ```
 //! use utilities::{validate_finite, validate_finite_positive, validate_finite_negativo, UtilitiesErrors};
@@ -36,3 +39,6 @@ pub use numerics::*;
 
 mod utilities_errors;
 pub use utilities_errors::UtilitiesErrors;
+
+mod times;
+pub use times::*;

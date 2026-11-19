@@ -1,5 +1,6 @@
 use kinematics::KinematicsError;
 use trajectory::TrajectoryError;
+use utilities::UtilitiesErrors;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlannerError {
@@ -17,7 +18,9 @@ pub enum PlannerError {
     SegmentUnreachable,
     InvalidJointVelocity,
     NumericalFailure,
+    /// La suma de tiempos excedió el rango finito.
     TimeElapsedOverflow,
+    /// El redondeo borró un operando positivo al sumar tiempos.
     TimeElapsedPrecisionLost,
     InvalidJointAcceleration,
     InvalidMaxVelocity,
@@ -31,4 +34,15 @@ pub enum PlannerError {
     MorePointsThanSpeedsBuffer,
     InsufficientPoints,
     DiscontinuousJointVelocity,
+}
+
+impl PlannerError {
+    pub(crate) fn from_time_error(error: UtilitiesErrors) -> Self {
+        match error {
+            UtilitiesErrors::InvalidTime => Self::InvalidTime,
+            UtilitiesErrors::TimeOverflow => Self::TimeElapsedOverflow,
+            UtilitiesErrors::TimePrecisionLost => Self::TimeElapsedPrecisionLost,
+            _ => Self::NumericalFailure,
+        }
+    }
 }

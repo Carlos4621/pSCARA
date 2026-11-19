@@ -42,16 +42,14 @@ fn slow_profile(velocity: f64) -> CoordinatedJointMotionProfile {
 }
 
 #[test]
-fn constructor_preserves_finite_nonnegative_start_times_including_signed_zero() {
+fn constructor_preserves_start_time_bits_including_signed_zero() {
     for start in [
         0.0,
         -0.0,
-        f64::from_bits(1),
-        f64::MIN_POSITIVE,
+        2.0 * f64::EPSILON,
         0.5,
         10.0,
-        1e300,
-        f64::MAX,
+        libm::scalbn(1.0, 53),
     ] {
         let timed = TimedCoordinatedJointProfile::new(start, profile()).unwrap();
         assert_eq!(timed.start_time().to_bits(), start.to_bits());
@@ -93,13 +91,15 @@ fn constructor_rejects_nonfinite_and_negative_start_times() {
 }
 
 #[test]
-fn a_genuine_end_time_overflow_is_reported_as_time_elapsed_overflow() {
+fn constructor_rejects_end_time_overflow() {
     let profile = slow_profile(f64::MIN_POSITIVE / 2.0);
     let duration = profile.total_time();
     assert_eq!(duration, libm::scalbn(1.0, 1023));
     assert!((f64::MAX + duration).is_infinite());
-    let timed = TimedCoordinatedJointProfile::new(f64::MAX, profile).unwrap();
-    assert_eq!(timed.end_time(), Err(PlannerError::TimeElapsedOverflow));
+    assert!(matches!(
+        TimedCoordinatedJointProfile::new(f64::MAX, profile),
+        Err(PlannerError::TimeElapsedOverflow)
+    ));
 }
 
 #[test]
@@ -112,50 +112,28 @@ fn a_large_representable_end_time_is_accepted() {
 }
 
 #[test]
-fn a_positive_duration_absorbed_by_start_time_returns_precision_lost() {
-    let start = libm::scalbn(1.0, 54);
-    let profile = profile();
-    assert!(profile.total_time() > 0.0);
-    assert_eq!(start + profile.total_time(), start);
-    let timed = TimedCoordinatedJointProfile::new(start, profile).unwrap();
-    assert_eq!(
-        timed.end_time(),
-        Err(PlannerError::TimeElapsedPrecisionLost)
-    );
-}
-
-#[test]
-fn a_positive_start_time_absorbed_by_duration_returns_precision_lost() {
-    for start in [f64::from_bits(1), f64::MIN_POSITIVE, f64::EPSILON / 2.0] {
-        let duration = profile().total_time();
-        assert!(start > 0.0);
-        assert_eq!(start + duration, duration);
-        let timed = TimedCoordinatedJointProfile::new(start, profile()).unwrap();
-        assert_eq!(
-            timed.end_time(),
+fn constructor_rejects_a_duration_absorbed_by_start_time() {
+    for start in [libm::scalbn(1.0, 54), 1e300, f64::MAX] {
+        let profile = profile();
+        assert_eq!(profile.total_time(), 2.0);
+        assert_eq!(start + profile.total_time(), start);
+        assert!(matches!(
+            TimedCoordinatedJointProfile::new(start, profile),
             Err(PlannerError::TimeElapsedPrecisionLost)
-        );
-        assert_eq!(
-            position(&timed, start),
-            Err(PlannerError::TimeElapsedPrecisionLost)
-        );
-        assert_eq!(
-            position(&timed, duration),
-            Err(PlannerError::TimeElapsedPrecisionLost)
-        );
-        assert_eq!(position(&timed, -1.0), Err(PlannerError::InvalidTime));
+        ));
     }
 }
 
 #[test]
-fn position_queries_propagate_a_duration_absorbed_by_start_time() {
-    let start = libm::scalbn(1.0, 54);
-    assert_eq!(start + profile().total_time(), start);
-    let timed = TimedCoordinatedJointProfile::new(start, profile()).unwrap();
-    assert_eq!(
-        position(&timed, start),
-        Err(PlannerError::TimeElapsedPrecisionLost)
-    );
+fn constructor_rejects_a_positive_start_time_absorbed_by_duration() {
+    for start in [f64::from_bits(1), f64::MIN_POSITIVE, f64::EPSILON / 2.0] {
+        let profile = profile();
+        assert_eq!(start + profile.total_time(), profile.total_time());
+        assert!(matches!(
+            TimedCoordinatedJointProfile::new(start, profile),
+            Err(PlannerError::TimeElapsedPrecisionLost)
+        ));
+    }
 }
 
 #[test]
@@ -178,22 +156,25 @@ fn round_to_even_can_advance_an_odd_start_time_by_half_an_ulp() {
 }
 
 #[test]
-fn a_representable_subnormal_duration_is_valid_at_zero_offset() {
-    let profile = CoordinatedJointMotionProfile::new(
-        angles([0.0, 0.0]),
-        angles([1.0, 0.0]),
-        &JointVelocityLimits::new(f64::MAX, 1.0).unwrap(),
-        &JointAccelerationLimits::new(1.0, 1.0).unwrap(),
-        f64::MAX,
-        f64::MAX,
-    )
-    .unwrap();
-    let duration = profile.total_time();
-    assert!(duration > 0.0 && duration < f64::MIN_POSITIVE);
-    let timed = TimedCoordinatedJointProfile::new(0.0, profile).unwrap();
-    assert_eq!(timed.end_time(), Ok(duration));
-    assert_eq!(position(&timed, 0.0), Ok([0.0, 0.0]));
-    assert_eq!(position(&timed, duration), Ok([1.0, 0.0]));
+fn a_representable_subnormal_duration_is_valid_at_zero_and_subnormal_offsets() {
+    for start in [0.0, f64::from_bits(1)] {
+        let profile = CoordinatedJointMotionProfile::new(
+            angles([0.0, 0.0]),
+            angles([1.0, 0.0]),
+            &JointVelocityLimits::new(f64::MAX, 1.0).unwrap(),
+            &JointAccelerationLimits::new(1.0, 1.0).unwrap(),
+            f64::MAX,
+            f64::MAX,
+        )
+        .unwrap();
+        let duration = profile.total_time();
+        assert!(duration > 0.0 && duration < f64::MIN_POSITIVE);
+        let timed = TimedCoordinatedJointProfile::new(start, profile).unwrap();
+        assert_eq!(timed.start_time().to_bits(), start.to_bits());
+        assert_eq!(timed.end_time(), Ok(start + duration));
+        assert_eq!(position(&timed, start), Ok([0.0, 0.0]));
+        assert_eq!(position(&timed, start + duration), Ok([1.0, 0.0]));
+    }
 }
 
 #[test]
@@ -328,32 +309,6 @@ fn nonfinite_or_negative_global_times_are_rejected() {
             assert_eq!(position(&timed, time), Err(PlannerError::InvalidTime));
         }
     }
-}
-
-#[test]
-fn position_queries_propagate_an_unrepresentable_end_time() {
-    let timed =
-        TimedCoordinatedJointProfile::new(f64::MAX, slow_profile(f64::MIN_POSITIVE / 2.0)).unwrap();
-    assert_eq!(
-        position(&timed, f64::MAX),
-        Err(PlannerError::TimeElapsedOverflow)
-    );
-}
-
-#[test]
-fn invalid_global_time_is_rejected_before_an_invalid_schedule_is_evaluated() {
-    // Construction validates the offset; the finite end time is checked lazily.
-    let timed =
-        TimedCoordinatedJointProfile::new(f64::MAX, slow_profile(f64::MIN_POSITIVE / 2.0)).unwrap();
-    assert_eq!(position(&timed, -1.0), Err(PlannerError::InvalidTime));
-    assert_eq!(
-        position(&timed, f64::INFINITY),
-        Err(PlannerError::InvalidTime)
-    );
-    assert_eq!(
-        position(&timed, 0.0),
-        Err(PlannerError::TimeElapsedOverflow)
-    );
 }
 
 #[test]

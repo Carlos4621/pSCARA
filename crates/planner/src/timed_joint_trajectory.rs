@@ -75,13 +75,8 @@ impl Iterator for TimedJointTrajectory<'_> {
                 None => 0.0,
             };
 
-            let new_time = self.time_elapsed + delta_time;
-
-            utilities::validate_finite(new_time).map_err(|_| PlannerError::TimeElapsedOverflow)?;
-
-            if delta_time > 0.0 && new_time <= self.time_elapsed {
-                return Err(PlannerError::TimeElapsedPrecisionLost);
-            }
+            let new_time = utilities::checked_time_sumatory(&[self.time_elapsed, delta_time])
+                .map_err(PlannerError::from_time_error)?;
 
             self.previous_angle = Some(angle);
             self.time_elapsed = new_time;

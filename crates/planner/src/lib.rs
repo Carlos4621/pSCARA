@@ -69,3 +69,6 @@ pub use coordinated_step_interpolator::{CoordinatedStepInterpolator, StepEvent};
 
 mod step_time_base;
 pub use step_time_base::StepTimeBase;
+
+mod motor_position_sampler;
+pub use motor_position_sampler::MotorPositionSampler;

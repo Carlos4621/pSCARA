@@ -66,3 +66,6 @@ pub use motor_step_move::{AxisStepMove, MotorStepMove, StepDirection};
 
 mod coordinated_step_interpolator;
 pub use coordinated_step_interpolator::{CoordinatedStepInterpolator, StepEvent};
+
+mod step_time_base;
+pub use step_time_base::StepTimeBase;

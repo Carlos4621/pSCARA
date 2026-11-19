@@ -81,3 +81,6 @@ pub use timed_step_interpolator::{TimedStepEvent, TimedStepInterpolator};
 
 mod step_transition_detector;
 pub use step_transition_detector::StepTransitionDetector;
+
+mod transition_finder;
+pub use transition_finder::find_first_transition_tick;

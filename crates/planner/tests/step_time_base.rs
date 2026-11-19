@@ -9,6 +9,80 @@ const EXACT_INTEGER_LIMIT: u64 = 1_u64 << 53;
 const SMALLEST: f64 = f64::from_bits(1);
 
 #[test]
+fn ticks_convert_to_whole_and_fractional_seconds() {
+    for (frequency, ticks, expected) in [
+        (1, 2, 2.0),
+        (4, 1, 0.25),
+        (3, 1, 1.0 / 3.0),
+        (1_000, 125, 0.125),
+        (48_000, 60_000, 1.25),
+    ] {
+        let base = StepTimeBase::new(frequency).unwrap();
+        assert_eq!(
+            base.ticks_to_seconds(ticks),
+            expected,
+            "frequency={frequency}, ticks={ticks}"
+        );
+    }
+}
+
+#[test]
+fn zero_ticks_returns_positive_zero_and_extreme_ratios_stay_finite() {
+    for frequency in [1, 1_000, u64::MAX] {
+        let base = StepTimeBase::new(frequency).unwrap();
+        assert_eq!(base.ticks_to_seconds(0).to_bits(), 0.0_f64.to_bits());
+        assert_eq!(base.ticks_to_seconds(frequency), 1.0);
+    }
+
+    assert_eq!(
+        StepTimeBase::new(1).unwrap().ticks_to_seconds(u64::MAX),
+        U64_EXCLUSIVE_UPPER_BOUND
+    );
+    assert_eq!(
+        StepTimeBase::new(u64::MAX).unwrap().ticks_to_seconds(1),
+        1.0 / U64_EXCLUSIVE_UPPER_BOUND
+    );
+}
+
+#[test]
+fn large_operands_are_divided_before_rounding() {
+    let below_one = 1.0_f64.next_down();
+    for (ticks, frequency) in [
+        (EXACT_INTEGER_LIMIT, EXACT_INTEGER_LIMIT + 1),
+        (EXACT_INTEGER_LIMIT + 1, EXACT_INTEGER_LIMIT + 2),
+    ] {
+        // Both exact ratios are just above 1 - 2^-53 and round to its f64.
+        let base = StepTimeBase::new(frequency).unwrap();
+        assert_eq!(base.ticks_to_seconds(ticks), below_one);
+    }
+}
+
+#[test]
+fn ties_choose_the_nearest_even_significand() {
+    let base = StepTimeBase::new(1).unwrap();
+    let lower = EXACT_INTEGER_LIMIT as f64;
+    assert_eq!(base.ticks_to_seconds(EXACT_INTEGER_LIMIT + 1), lower);
+    assert_eq!(base.ticks_to_seconds(EXACT_INTEGER_LIMIT + 3), lower + 4.0);
+    assert_eq!(
+        base.ticks_to_seconds(2 * EXACT_INTEGER_LIMIT - 1),
+        2.0 * lower
+    );
+}
+
+#[test]
+fn converting_small_tick_counts_to_seconds_and_back_recovers_the_count() {
+    for frequency in [1, 3, 1_000, 48_000, EXACT_INTEGER_LIMIT + 1, u64::MAX] {
+        let base = StepTimeBase::new(frequency).unwrap();
+        for ticks in 0..=2048 {
+            assert_eq!(
+                base.seconds_to_ticks(base.ticks_to_seconds(ticks)),
+                Ok(ticks)
+            );
+        }
+    }
+}
+
+#[test]
 fn ordinary_frequencies_convert_seconds_and_fractional_seconds() {
     for (frequency, seconds, expected) in [
         (1, 2.0, 2),
@@ -246,6 +320,8 @@ fn coordinated_profile_boundaries_quantize_to_shared_ticks() {
                 .and_then(|time| base.seconds_to_ticks(time)),
             Ok(end)
         );
+        assert_eq!(base.ticks_to_seconds(start), profile.start_time());
+        assert_eq!(base.ticks_to_seconds(end), profile.end_time().unwrap());
     }
     assert!(timed.next().is_none());
 }

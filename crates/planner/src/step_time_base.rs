@@ -14,6 +14,40 @@ impl StepTimeBase {
         Ok(Self { ticks_per_second })
     }
 
+    /// Convierte ticks a segundos como el `f64` más cercano al cociente exacto.
+    /// En caso de empate, elige el valor con significando par.
+    pub fn ticks_to_seconds(&self, ticks: u64) -> f64 {
+        if ticks == 0 {
+            return 0.0;
+        }
+
+        let numerator = u128::from(ticks);
+        let denominator = u128::from(self.ticks_per_second);
+        let mut exponent = ticks.ilog2() as i32 - self.ticks_per_second.ilog2() as i32;
+        // The difference in bit lengths is at most one above floor(log2(ticks / rate)).
+        let below_power = if exponent >= 0 {
+            numerator < (denominator << exponent)
+        } else {
+            (numerator << exponent.unsigned_abs()) < denominator
+        };
+        exponent -= i32::from(below_power);
+
+        let shift = 52 - exponent;
+        let (numerator, denominator) = if shift >= 0 {
+            (numerator << shift, denominator)
+        } else {
+            (numerator, denominator << shift.unsigned_abs())
+        };
+        let mut significand = numerator / denominator;
+        let twice_remainder = 2 * (numerator % denominator);
+        if twice_remainder > denominator || (twice_remainder == denominator && significand & 1 != 0)
+        {
+            significand += 1;
+        }
+
+        libm::scalbn(significand as f64, exponent - 52)
+    }
+
     /// Convierte el valor exacto de `seconds` al tick más cercano.
     /// Los empates de medio tick se redondean hacia arriba.
     /// Rechaza tiempos negativos o no finitos con [`PlannerError::InvalidTime`]
@@ -46,7 +80,7 @@ impl StepTimeBase {
             if shift >= u128::BITS {
                 return Ok(0);
             }
-        
+
             let round_up = (product >> (shift - 1)) & 1;
             (product >> shift) + round_up
         };

@@ -1,7 +1,8 @@
 use kinematics::JointAngles;
 use planner::{
-    CoordinatedJointPathProfiles, CoordinatedJointTrajectory, JointAccelerationLimits,
-    JointVelocityLimits, PlannerError, TimedCoordinatedJointPathProfiles, plan_joint_path_speeds,
+    CoordinatedJointPathProfiles, CoordinatedJointSample, CoordinatedJointTrajectory,
+    JointAccelerationLimits, JointVelocityLimits, PlannerError, TimedCoordinatedJointPathProfiles,
+    plan_joint_path_speeds,
 };
 
 type Pair = [f64; 2];
@@ -39,6 +40,35 @@ fn assert_query_error(trajectory: &CoordinatedJointTrajectory<'_>, time: f64, er
         Err(error),
         "acceleration at {time}"
     );
+    assert_eq!(
+        trajectory.sample_at(time).unwrap_err(),
+        error,
+        "sample at {time}"
+    );
+}
+
+fn assert_sample(
+    trajectory: &CoordinatedJointTrajectory<'_>,
+    time: f64,
+    expected_position: Pair,
+    expected_velocity: (f64, f64),
+    expected_acceleration: (f64, f64),
+) {
+    let CoordinatedJointSample {
+        position,
+        velocity,
+        acceleration,
+    } = trajectory.sample_at(time).unwrap();
+    assert_eq!(
+        [position.first_theta(), position.second_theta()],
+        expected_position,
+        "sample position at {time}"
+    );
+    assert_eq!(velocity, expected_velocity, "sample velocity at {time}");
+    assert_eq!(
+        acceleration, expected_acceleration,
+        "sample acceleration at {time}"
+    );
 }
 
 #[test]
@@ -53,6 +83,13 @@ fn one_segment_accepts_signed_zero_and_both_endpoints() {
         assert_eq!(position(&trajectory, time), Ok([2.0, -1.0]));
         assert_eq!(trajectory.velocity_at(time), Ok((4.0 * time, -2.0 * time)));
         assert_eq!(trajectory.acceleration_at(time), Ok((4.0, -2.0)));
+        assert_sample(
+            &trajectory,
+            time,
+            [2.0, -1.0],
+            (4.0 * time, -2.0 * time),
+            (4.0, -2.0),
+        );
     }
     assert_eq!(position(&trajectory, 1.0), Ok([4.0, -2.0]));
     assert_eq!(position(&trajectory, 2.0), Ok([6.0, -3.0]));
@@ -91,6 +128,7 @@ fn repeated_queries_can_move_across_the_path_in_either_direction() {
             Ok(acceleration),
             "time={time}"
         );
+        assert_sample(&trajectory, time, expected, velocity, acceleration);
     }
 }
 
@@ -132,6 +170,17 @@ fn composing_with_the_speed_planner_preserves_moving_junctions_and_stops() {
             trajectory.acceleration_at(time.next_up()),
             Ok(right_acceleration)
         );
+        let sample = trajectory.sample_at(time).unwrap();
+        assert_eq!(sample.velocity, velocity);
+        assert_eq!(sample.acceleration, left_acceleration);
+        assert_eq!(
+            trajectory.sample_at(time.next_down()).unwrap().acceleration,
+            left_acceleration
+        );
+        assert_eq!(
+            trajectory.sample_at(time.next_up()).unwrap().acceleration,
+            right_acceleration
+        );
     }
 }
 
@@ -157,6 +206,13 @@ fn a_partly_consumed_timed_path_keeps_the_original_clock_and_has_no_prefix() {
         assert_eq!(position(&trajectory, time), Ok([expected, 0.0]));
         assert_eq!(trajectory.velocity_at(time), Ok((velocity, 0.0)));
         assert_eq!(trajectory.acceleration_at(time), Ok((acceleration, 0.0)));
+        assert_sample(
+            &trajectory,
+            time,
+            [expected, 0.0],
+            (velocity, 0.0),
+            (acceleration, 0.0),
+        );
     }
     assert_query_error(&trajectory, 12.0_f64.next_up(), PlannerError::InvalidTime);
 }
@@ -200,6 +256,13 @@ fn very_large_representable_times_keep_their_segment_boundaries() {
         assert_eq!(position(&trajectory, time), Ok([x, 0.0]));
         assert_eq!(trajectory.velocity_at(time), Ok((velocity, 0.0)));
         assert_eq!(trajectory.acceleration_at(time), Ok((acceleration, 0.0)));
+        assert_sample(
+            &trajectory,
+            time,
+            [x, 0.0],
+            (velocity, 0.0),
+            (acceleration, 0.0),
+        );
     }
     assert_query_error(
         &trajectory,
@@ -228,6 +291,20 @@ fn one_ulp_in_global_time_is_enough_to_reach_the_exact_final_position() {
     assert_eq!(
         trajectory.acceleration_at(end),
         Ok((0.0, -libm::scalbn(1.0, 108)))
+    );
+    assert_sample(
+        &trajectory,
+        junction,
+        [distance, 0.0],
+        (0.0, 0.0),
+        (-1.0, 0.0),
+    );
+    assert_sample(
+        &trajectory,
+        end,
+        [distance, 1.0],
+        (0.0, 0.0),
+        (0.0, -libm::scalbn(1.0, 108)),
     );
     assert_query_error(&trajectory, end.next_up(), PlannerError::InvalidTime);
 }
@@ -281,6 +358,8 @@ fn a_moving_suffix_uses_its_first_segment_at_the_original_junction() {
     assert_eq!(full.acceleration_at(junction), Ok((2.0, 0.0)));
     assert_eq!(suffix.acceleration_at(junction), Ok((-2.0, 0.0)));
     assert_eq!(suffix.velocity_at(2.0), Ok((0.0, 0.0)));
+    assert_sample(&full, junction, [1.0, 0.0], (2.0, 0.0), (2.0, 0.0));
+    assert_sample(&suffix, junction, [1.0, 0.0], (2.0, 0.0), (-2.0, 0.0));
 }
 
 #[test]
@@ -312,4 +391,83 @@ fn derivatives_match_centered_differences_inside_later_segments() {
             );
         }
     }
+}
+
+#[test]
+fn sample_agrees_bitwise_with_individual_queries_at_fractional_times() {
+    let points = [[0.0, -0.0], [1.0, -0.0], [1.0, -0.3], [1.7, -0.6]].map(angles);
+    let velocity = JointVelocityLimits::new(10.0, 10.0).unwrap();
+    let acceleration = JointAccelerationLimits::new(1.0, 2.0).unwrap();
+    let timed = timed_path(&points, &[0.0; 4], &velocity, &acceleration);
+    let trajectory = CoordinatedJointTrajectory::new(timed).unwrap();
+
+    assert_eq!(
+        trajectory
+            .sample_at(0.0)
+            .unwrap()
+            .position
+            .second_theta()
+            .to_bits(),
+        (-0.0_f64).to_bits()
+    );
+    for segment in timed {
+        let segment = segment.unwrap();
+        let start = segment.start_time();
+        let end = segment.end_time().unwrap();
+        for step in (0..=32).rev() {
+            let time = if step == 32 {
+                end
+            } else {
+                start + (end - start) * (f64::from(step) / 32.0)
+            };
+            let sample = trajectory.sample_at(time).unwrap();
+            let [first, second] = position(&trajectory, time).unwrap();
+            let (v1, v2) = trajectory.velocity_at(time).unwrap();
+            let (a1, a2) = trajectory.acceleration_at(time).unwrap();
+            let actual = [
+                sample.position.first_theta(),
+                sample.position.second_theta(),
+                sample.velocity.0,
+                sample.velocity.1,
+                sample.acceleration.0,
+                sample.acceleration.1,
+            ];
+            let expected = [first, second, v1, v2, a1, a2];
+            assert_eq!(
+                actual.map(f64::to_bits),
+                expected.map(f64::to_bits),
+                "t={time}"
+            );
+        }
+    }
+}
+
+#[test]
+fn sample_propagates_a_numerical_error_from_one_component() {
+    let points = [[0.0, 0.0], [1.04, 0.0]].map(angles);
+    let velocity = JointVelocityLimits::new(10.0, 10.0).unwrap();
+    let acceleration = JointAccelerationLimits::new(f64::MAX, 1.0).unwrap();
+    let timed = timed_path(&points, &[0.0; 2], &velocity, &acceleration);
+    let trajectory = CoordinatedJointTrajectory::new(timed).unwrap();
+
+    // Converting the rounded progress acceleration back to the first joint
+    // overflows, even though position and velocity at the start are finite.
+    assert_eq!(position(&trajectory, 0.0), Ok([0.0, 0.0]));
+    assert_eq!(trajectory.velocity_at(0.0), Ok((0.0, 0.0)));
+    assert_eq!(
+        trajectory.acceleration_at(0.0),
+        Err(PlannerError::NumericalFailure)
+    );
+    assert_eq!(
+        trajectory.sample_at(0.0).unwrap_err(),
+        PlannerError::NumericalFailure
+    );
+
+    let cruise = trajectory.sample_at(0.05).unwrap();
+    assert_eq!(cruise.acceleration, (0.0, 0.0));
+    assert!(cruise.position.first_theta() > 0.0 && cruise.velocity.0 > 0.0);
+    assert_eq!(
+        trajectory.sample_at(0.0).unwrap_err(),
+        PlannerError::NumericalFailure
+    );
 }

@@ -26,6 +26,14 @@ impl MotorStepMove {
         }
     }
 
+    pub fn first(&self) -> AxisStepMove {
+        self.first
+    }
+
+    pub fn second(&self) -> AxisStepMove {
+        self.second
+    }
+
     fn get_axis_move(origin: i64, target: i64) -> AxisStepMove {
         AxisStepMove {
             direction: if origin <= target {

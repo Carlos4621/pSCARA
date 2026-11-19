@@ -74,4 +74,4 @@ mod motor_position_sampler;
 pub use motor_position_sampler::MotorPositionSampler;
 
 mod motor_step_interval;
-pub use motor_step_interval::MotorSpeedInterval;
+pub use motor_step_interval::MotorStepInterval;

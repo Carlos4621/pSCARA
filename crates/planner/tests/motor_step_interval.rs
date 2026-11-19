@@ -2,7 +2,7 @@ use kinematics::JointAngles;
 use planner::{
     AxisStepMove, CoordinatedJointPathProfiles, CoordinatedJointTrajectory,
     CoordinatedJointTrajectoryCursor, CoordinatedStepInterpolator, JointAccelerationLimits,
-    JointToStepsConverter, JointVelocityLimits, MotorPositionSampler, MotorSpeedInterval,
+    JointToStepsConverter, JointVelocityLimits, MotorPositionSampler, MotorStepInterval,
     MotorSteps, PlannerError, StepDirection, StepEvent, StepTimeBase,
     TimedCoordinatedJointPathProfiles,
 };
@@ -19,7 +19,7 @@ fn axis(direction: StepDirection, pulses: u64) -> AxisStepMove {
 
 #[test]
 fn keeps_both_timestamps_and_each_axis_movement() {
-    let interval = MotorSpeedInterval::new(120, 170, steps(-12, 40), steps(5, -3)).unwrap();
+    let interval = MotorStepInterval::new(120, 170, steps(-12, 40), steps(5, -3)).unwrap();
 
     assert_eq!(interval.start_tick(), 120);
     assert_eq!(interval.end_tick(), 170);
@@ -34,7 +34,7 @@ fn rejects_equal_ticks_with_or_without_movement() {
     for tick in [0, 1, 1_u64 << 53, 1_u64 << 63, u64::MAX] {
         for target in [origin, steps(3, -9)] {
             assert_eq!(
-                MotorSpeedInterval::new(tick, tick, origin, target).unwrap_err(),
+                MotorStepInterval::new(tick, tick, origin, target).unwrap_err(),
                 PlannerError::EndBeforeStart,
                 "tick={tick}, target={target:?}"
             );
@@ -52,7 +52,7 @@ fn rejects_a_tick_before_the_start_across_the_unsigned_range() {
         (u64::MAX, 0),
     ] {
         assert_eq!(
-            MotorSpeedInterval::new(start, end, steps(5, -7), steps(6, -7)).unwrap_err(),
+            MotorStepInterval::new(start, end, steps(5, -7), steps(6, -7)).unwrap_err(),
             PlannerError::EndBeforeStart,
             "start={start}, end={end}"
         );
@@ -69,7 +69,7 @@ fn duration_is_exact_from_one_tick_to_the_full_u64_range() {
         (u64::MAX - 17, u64::MAX, 17),
         (0, u64::MAX, u64::MAX),
     ] {
-        let interval = MotorSpeedInterval::new(start, end, steps(0, 0), steps(1, -1)).unwrap();
+        let interval = MotorStepInterval::new(start, end, steps(0, 0), steps(1, -1)).unwrap();
         assert_eq!(interval.start_tick(), start);
         assert_eq!(interval.end_tick(), end);
         assert_eq!(interval.duration_ticks(), duration);
@@ -79,7 +79,7 @@ fn duration_is_exact_from_one_tick_to_the_full_u64_range() {
 #[test]
 fn a_stationary_interval_keeps_its_duration_without_any_pulses() {
     let at_rest = steps(-42, 100);
-    let interval = MotorSpeedInterval::new(16, 64, at_rest, at_rest).unwrap();
+    let interval = MotorStepInterval::new(16, 64, at_rest, at_rest).unwrap();
     assert_eq!(interval.duration_ticks(), 48);
     let movement = interval.movement();
     assert_eq!(movement.first(), axis(Positive, 0));
@@ -91,7 +91,7 @@ fn a_stationary_interval_keeps_its_duration_without_any_pulses() {
 
 #[test]
 fn full_signed_step_displacements_keep_their_directions_and_magnitudes() {
-    let interval = MotorSpeedInterval::new(
+    let interval = MotorStepInterval::new(
         0,
         u64::MAX,
         steps(i64::MIN, i64::MAX),
@@ -139,7 +139,7 @@ fn consecutive_motor_samples_create_intervals_whose_pulses_reach_each_target() {
     ] {
         let target = sampler.sample_at_tick(end).unwrap();
         assert_eq!(target, expected);
-        let interval = MotorSpeedInterval::new(start, end, reached, target).unwrap();
+        let interval = MotorStepInterval::new(start, end, reached, target).unwrap();
         assert_eq!(interval.duration_ticks(), 8);
 
         let movement = interval.movement();

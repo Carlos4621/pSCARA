@@ -1,13 +1,13 @@
 use crate::{MotorStepMove, MotorSteps, PlannerError};
 
 #[derive(Debug, Clone, Copy)]
-pub struct MotorSpeedInterval {
+pub struct MotorStepInterval {
     start_tick: u64,
     end_tick: u64,
     movement: MotorStepMove,
 }
 
-impl MotorSpeedInterval {
+impl MotorStepInterval {
     pub fn new(start_tick: u64, end_tick: u64, origin: MotorSteps, target: MotorSteps) -> Result<Self, PlannerError> {
         if end_tick <= start_tick {
             return Err(PlannerError::EndBeforeStart);

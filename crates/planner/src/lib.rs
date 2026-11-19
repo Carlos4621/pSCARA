@@ -63,3 +63,6 @@ pub use joint_to_steps_converter::{JointToStepsConverter, MotorSteps};
 
 mod motor_step_move;
 pub use motor_step_move::{AxisStepMove, MotorStepMove, StepDirection};
+
+mod coordinated_step_interpolator;
+pub use coordinated_step_interpolator::{CoordinatedStepInterpolator, StepEvent};

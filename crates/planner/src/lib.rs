@@ -51,3 +51,4 @@ mod timed_coordinated_joint_profile;
 pub use timed_coordinated_joint_profile::TimedCoordinatedJointProfile;
 
 mod timed_coordinated_joint_path_profiles;
+pub use timed_coordinated_joint_path_profiles::TimedCoordinatedJointPathProfiles;

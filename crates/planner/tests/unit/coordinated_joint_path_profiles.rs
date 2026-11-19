@@ -138,3 +138,30 @@ fn total_path_time_and_timed_constructor_propagate_upstream_errors() {
         );
     }
 }
+
+#[test]
+fn timed_iterator_stops_when_a_segment_from_the_source_fails() {
+    let points = [0.0, 1.0, 1.0, 3.0].map(angles);
+    let speeds = [0.0; 4];
+    let vl = JointVelocityLimits::new(10.0, 10.0).unwrap();
+    let al = JointAccelerationLimits::new(1.0, 1.0).unwrap();
+    // The middle segment is stationary, and a valid segment follows it.
+    let profiles = CoordinatedJointPathProfiles {
+        points: &points,
+        speeds: &speeds,
+        velocity_limits: &vl,
+        acceleration_limits: &al,
+        current_segment: 0,
+    };
+
+    let mut timed = TimedCoordinatedJointPathProfiles::from_unvalidated_source_for_test(profiles);
+    let first = timed.next().unwrap().unwrap();
+    assert_eq!(first.start_time(), 0.0);
+    assert_eq!(first.end_time(), Ok(2.0));
+    assert_eq!(
+        timed.next().unwrap().unwrap_err(),
+        PlannerError::ZeroDisplacementMotion
+    );
+    assert!(timed.next().is_none());
+    assert!(timed.next().is_none());
+}

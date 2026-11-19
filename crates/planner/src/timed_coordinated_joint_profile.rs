@@ -32,6 +32,26 @@ impl TimedCoordinatedJointProfile {
     }
 
     pub fn position_at(&self, global_time: f64) -> Result<JointAngles, PlannerError> {
+        self.profile.position_at(self.get_local_time(global_time)?)
+    }
+
+    pub fn velocity_at(&self, global_time: f64) -> Result<(f64, f64), PlannerError> {
+        self.profile.velocity_at(self.get_local_time(global_time)?)
+    }
+
+    pub fn acceleration_at(&self, global_time: f64) -> Result<(f64, f64), PlannerError> {
+        self.profile.acceleration_at(self.get_local_time(global_time)?)
+    }  
+
+    fn validate_local_time(&self, time: f64) -> Result<(), PlannerError> {
+        if !(0.0..=self.profile.total_time()).contains(&time) {
+            return Err(PlannerError::InvalidTime);
+        }
+
+        Ok(())
+    }
+
+    fn get_local_time(&self, global_time: f64) -> Result<f64, PlannerError> {
         utilities::validate_finite_positive(global_time).map_err(|_| PlannerError::InvalidTime)?;
 
         let end_time = self.end_time()?;
@@ -41,21 +61,13 @@ impl TimedCoordinatedJointProfile {
         }
 
         if global_time == end_time {
-            return self.profile.position_at(self.profile.total_time());
+            return Ok(self.profile.total_time());
         }
 
         let local_time = global_time - self.start_time;
 
         self.validate_local_time(local_time)?;
 
-        self.profile.position_at(local_time)
-    }
-
-    fn validate_local_time(&self, time: f64) -> Result<(), PlannerError> {
-        if !(0.0..=self.profile.total_time()).contains(&time) {
-            return Err(PlannerError::InvalidTime);
-        }
-
-        Ok(())
+        Ok(local_time)
     }
 }

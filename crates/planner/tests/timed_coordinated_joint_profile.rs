@@ -1,7 +1,8 @@
 use kinematics::JointAngles;
 use planner::{
     CoordinatedJointMotionProfile, CoordinatedJointPathProfiles, JointAccelerationLimits,
-    JointVelocityLimits, PlannerError, TimedCoordinatedJointProfile,
+    JointVelocityLimits, PlannerError, TimedCoordinatedJointPathProfiles,
+    TimedCoordinatedJointProfile, plan_joint_path_speeds,
 };
 
 type Pair = [f64; 2];
@@ -108,7 +109,20 @@ fn a_large_representable_end_time_is_accepted() {
     let duration = profile.total_time();
     assert_eq!(duration, libm::scalbn(1.0, 1022));
     let timed = TimedCoordinatedJointProfile::new(duration, profile).unwrap();
-    assert_eq!(timed.end_time(), Ok(libm::scalbn(1.0, 1023)));
+    let end = libm::scalbn(1.0, 1023);
+    assert_eq!(timed.end_time(), Ok(end));
+    for (time, velocity, acceleration) in [
+        (duration, (0.0, 0.0), (1.0, 0.0)),
+        (
+            f64::midpoint(duration, end),
+            (f64::MIN_POSITIVE, 0.0),
+            (0.0, 0.0),
+        ),
+        (end, (0.0, 0.0), (-1.0, 0.0)),
+    ] {
+        assert_eq!(timed.velocity_at(time), Ok(velocity));
+        assert_eq!(timed.acceleration_at(time), Ok(acceleration));
+    }
 }
 
 #[test]
@@ -145,6 +159,10 @@ fn round_to_even_can_advance_an_odd_start_time_by_half_an_ulp() {
     // No representable time lies strictly inside this global interval.
     assert_eq!(position(&timed, start), Ok([2.0, -1.0]));
     assert_eq!(position(&timed, start.next_up()), Ok([6.0, -3.0]));
+    assert_eq!(timed.velocity_at(start), Ok((0.0, 0.0)));
+    assert_eq!(timed.acceleration_at(start), Ok((4.0, -2.0)));
+    assert_eq!(timed.velocity_at(start.next_up()), Ok((0.0, 0.0)));
+    assert_eq!(timed.acceleration_at(start.next_up()), Ok((-4.0, 2.0)));
     assert_eq!(
         position(&timed, start.next_down()),
         Err(PlannerError::InvalidTime)
@@ -174,6 +192,10 @@ fn a_representable_subnormal_duration_is_valid_at_zero_and_subnormal_offsets() {
         assert_eq!(timed.end_time(), Ok(start + duration));
         assert_eq!(position(&timed, start), Ok([0.0, 0.0]));
         assert_eq!(position(&timed, start + duration), Ok([1.0, 0.0]));
+        for time in [start, start + duration / 2.0, start + duration] {
+            assert_eq!(timed.velocity_at(time), Ok((f64::MAX, 0.0)));
+            assert_eq!(timed.acceleration_at(time), Ok((0.0, 0.0)));
+        }
     }
 }
 
@@ -194,8 +216,11 @@ fn zero_offset_preserves_every_sample_of_the_original_profile() {
 #[test]
 fn negative_zero_offset_and_global_time_are_valid_at_the_start() {
     let timed = TimedCoordinatedJointProfile::new(-0.0, profile()).unwrap();
-    assert_eq!(position(&timed, -0.0), Ok([2.0, -1.0]));
-    assert_eq!(position(&timed, 0.0), Ok([2.0, -1.0]));
+    for time in [-0.0, 0.0] {
+        assert_eq!(position(&timed, time), Ok([2.0, -1.0]));
+        assert_eq!(timed.velocity_at(time), Ok((0.0, 0.0)));
+        assert_eq!(timed.acceleration_at(time), Ok((4.0, -2.0)));
+    }
 }
 
 #[test]
@@ -215,6 +240,108 @@ fn nonzero_offset_accepts_the_exact_global_end_time() {
     let timed = TimedCoordinatedJointProfile::new(10.0, profile()).unwrap();
     assert_eq!(timed.end_time(), Ok(12.0));
     assert_eq!(position(&timed, 12.0), Ok([6.0, -3.0]));
+}
+
+#[test]
+fn shifted_triangular_profiles_preserve_signed_velocity_and_acceleration() {
+    let timed = TimedCoordinatedJointProfile::new(10.0, profile()).unwrap();
+    for (global, velocity, acceleration) in [
+        (10.0, (0.0, 0.0), (4.0, -2.0)),
+        (10.5, (2.0, -1.0), (4.0, -2.0)),
+        (11.0, (4.0, -2.0), (4.0, -2.0)),
+        (11.5, (2.0, -1.0), (-4.0, 2.0)),
+        (12.0, (0.0, 0.0), (-4.0, 2.0)),
+    ] {
+        assert_eq!(timed.velocity_at(global), Ok(velocity), "t={global}");
+        assert_eq!(
+            timed.acceleration_at(global),
+            Ok(acceleration),
+            "t={global}"
+        );
+    }
+    assert_eq!(timed.acceleration_at(11.0_f64.next_up()), Ok((-4.0, 2.0)));
+}
+
+#[test]
+fn shifted_trapezoidal_profiles_preserve_cruise_and_phase_boundaries() {
+    // Joint displacements (8,-4) with peak velocities (4,-2) give one
+    // time unit for each ramp and one for cruise.
+    let motion = CoordinatedJointMotionProfile::new(
+        angles([1.0, 2.0]),
+        angles([9.0, -2.0]),
+        &JointVelocityLimits::new(4.0, 2.0).unwrap(),
+        &JointAccelerationLimits::new(4.0, 2.0).unwrap(),
+        0.0,
+        0.0,
+    )
+    .unwrap();
+    let timed = TimedCoordinatedJointProfile::new(8.0, motion).unwrap();
+    assert_eq!(timed.end_time(), Ok(11.0));
+    for (global, velocity, acceleration) in [
+        (8.5, (2.0, -1.0), (4.0, -2.0)),
+        (9.0, (4.0, -2.0), (4.0, -2.0)),
+        (9.0_f64.next_up(), (4.0, -2.0), (0.0, 0.0)),
+        (9.5, (4.0, -2.0), (0.0, 0.0)),
+        (10.0, (4.0, -2.0), (0.0, 0.0)),
+        (10.5, (2.0, -1.0), (-4.0, 2.0)),
+        (11.0, (0.0, 0.0), (-4.0, 2.0)),
+    ] {
+        assert_eq!(timed.velocity_at(global), Ok(velocity), "t={global}");
+        assert_eq!(
+            timed.acceleration_at(global),
+            Ok(acceleration),
+            "t={global}"
+        );
+    }
+    assert_eq!(timed.acceleration_at(10.0_f64.next_up()), Ok((-4.0, 2.0)));
+}
+
+#[test]
+fn global_end_returns_the_exact_nonzero_final_velocity_despite_rounding() {
+    let make_profile = || {
+        // Constant braking from progress speed 3/4 to 1/4 takes two time units.
+        CoordinatedJointMotionProfile::new(
+            angles([0.0, 0.0]),
+            angles([4.0, -2.0]),
+            &JointVelocityLimits::new(3.0, 1.5).unwrap(),
+            &JointAccelerationLimits::new(1.0, 0.5).unwrap(),
+            0.75,
+            0.25,
+        )
+        .unwrap()
+    };
+    for (start, rounds_up) in [(0.01, false), (2.06, true)] {
+        let reference = make_profile();
+        let duration = reference.total_time();
+        assert_eq!(duration, 2.0);
+        let end = start + duration;
+        let local = end - start;
+        if rounds_up {
+            assert!(local > duration);
+            assert_eq!(reference.velocity_at(local), Err(PlannerError::InvalidTime));
+            assert_eq!(
+                reference.acceleration_at(local),
+                Err(PlannerError::InvalidTime)
+            );
+        } else {
+            assert!(local < duration);
+            assert!(reference.velocity_at(local).unwrap().0 > 1.0);
+        }
+        let timed = TimedCoordinatedJointProfile::new(start, make_profile()).unwrap();
+        assert_eq!(timed.end_time(), Ok(end));
+        assert_eq!(timed.velocity_at(start), Ok((3.0, -1.5)));
+        assert_eq!(timed.acceleration_at(start), Ok((-1.0, 0.5)));
+        assert_eq!(timed.velocity_at(end), Ok((1.0, -0.5)));
+        assert_eq!(timed.acceleration_at(end), Ok((-1.0, 0.5)));
+        assert_eq!(
+            timed.velocity_at(end.next_up()),
+            Err(PlannerError::InvalidTime)
+        );
+        assert_eq!(
+            timed.acceleration_at(end.next_up()),
+            Err(PlannerError::InvalidTime)
+        );
+    }
 }
 
 #[test]
@@ -257,6 +384,14 @@ fn decimal_offsets_preserve_samples_strictly_inside_the_global_interval() {
                 position(&timed, global),
                 Ok([expected.first_theta(), expected.second_theta()])
             );
+            assert_eq!(
+                timed.velocity_at(global),
+                reference.velocity_at(global - start)
+            );
+            assert_eq!(
+                timed.acceleration_at(global),
+                reference.acceleration_at(global - start)
+            );
         }
     }
 }
@@ -284,14 +419,11 @@ fn global_times_outside_the_scheduled_interval_are_rejected() {
     for start in [0.0_f64, 0.5, 10.0] {
         let timed = TimedCoordinatedJointProfile::new(start, profile()).unwrap();
         let end = timed.end_time().unwrap();
-        assert_eq!(
-            position(&timed, start.next_down()),
-            Err(PlannerError::InvalidTime)
-        );
-        assert_eq!(
-            position(&timed, end.next_up()),
-            Err(PlannerError::InvalidTime)
-        );
+        for time in [start.next_down(), end.next_up(), f64::MAX] {
+            assert_eq!(position(&timed, time), Err(PlannerError::InvalidTime));
+            assert_eq!(timed.velocity_at(time), Err(PlannerError::InvalidTime));
+            assert_eq!(timed.acceleration_at(time), Err(PlannerError::InvalidTime));
+        }
     }
 }
 
@@ -307,6 +439,8 @@ fn nonfinite_or_negative_global_times_are_rejected() {
             -1.0,
         ] {
             assert_eq!(position(&timed, time), Err(PlannerError::InvalidTime));
+            assert_eq!(timed.velocity_at(time), Err(PlannerError::InvalidTime));
+            assert_eq!(timed.acceleration_at(time), Err(PlannerError::InvalidTime));
         }
     }
 }
@@ -342,6 +476,8 @@ fn profiles_with_nonzero_boundary_speeds_are_preserved_at_zero_offset() {
                 position(&timed, time),
                 Ok([expected.first_theta(), expected.second_theta()])
             );
+            assert_eq!(timed.velocity_at(time), reference.velocity_at(time));
+            assert_eq!(timed.acceleration_at(time), reference.acceleration_at(time));
         }
     }
 }
@@ -375,6 +511,8 @@ fn zero_offset_delegation_survives_extreme_common_geometric_scales() {
                 position(&timed, time),
                 Ok([expected.first_theta(), expected.second_theta()])
             );
+            assert_eq!(timed.velocity_at(time), reference.velocity_at(time));
+            assert_eq!(timed.acceleration_at(time), reference.acceleration_at(time));
         }
     }
 }
@@ -397,4 +535,36 @@ fn scheduled_profiles_from_a_complete_path_agree_at_their_shared_global_boundary
         position(&second, second.end_time().unwrap()),
         Ok([2.0, 0.0])
     );
+}
+
+#[test]
+fn timed_path_preserves_joint_velocity_and_one_sided_acceleration_at_junctions() {
+    let points = [[0.0, 0.0], [1.0, 0.0], [2.0, 0.0], [2.0, 1.0], [2.0, 2.0]].map(angles);
+    let vl = JointVelocityLimits::new(10.0, 10.0).unwrap();
+    let al = JointAccelerationLimits::new(2.0, 2.0).unwrap();
+    let mut speeds = [f64::NAN; 5];
+    plan_joint_path_speeds(&points, &vl, &al, &mut speeds).unwrap();
+    assert_eq!(speeds, [0.0, 2.0, 0.0, 2.0, 0.0]);
+    let source = CoordinatedJointPathProfiles::new(&points, &speeds, &vl, &al).unwrap();
+    let timed = TimedCoordinatedJointPathProfiles::new(source).unwrap();
+    let segments = timed.collect::<Result<Vec<_>, _>>().unwrap();
+    assert_eq!(segments.len(), 4);
+
+    for (index, (time, velocity, left_acceleration, right_acceleration)) in [
+        (1.0, (2.0, 0.0), (2.0, 0.0), (-2.0, 0.0)),
+        (2.0, (0.0, 0.0), (-2.0, 0.0), (0.0, 2.0)),
+        (3.0, (0.0, 2.0), (0.0, 2.0), (0.0, -2.0)),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let left = &segments[index];
+        let right = &segments[index + 1];
+        assert_eq!(left.end_time(), Ok(time));
+        assert_eq!(right.start_time(), time);
+        assert_eq!(left.velocity_at(time), Ok(velocity));
+        assert_eq!(right.velocity_at(time), Ok(velocity));
+        assert_eq!(left.acceleration_at(time), Ok(left_acceleration));
+        assert_eq!(right.acceleration_at(time), Ok(right_acceleration));
+    }
 }

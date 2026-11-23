@@ -147,3 +147,8 @@ pub use build_trajectory_step_events::{
     build_trajectory_step_events, build_verified_trajectory_step_events,
     preflight_trajectory_step_events,
 };
+
+mod build_pin_operation_batches;
+pub use build_pin_operation_batches::{
+    build_pin_operation_batches, build_verified_pin_operation_batches,
+};

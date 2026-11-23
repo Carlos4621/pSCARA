@@ -1,11 +1,13 @@
 use kinematics::JointAngles;
 use planner::{
     CoordinatedJointPathProfiles, CoordinatedJointTrajectory, JointAccelerationLimits,
-    JointToStepsConverter, JointVelocityLimits, MotorStepMove, MotorSteps, PlannerError,
-    ScheduledDirChange, ScheduledStepDirEvent, StepDirEvent, StepDirScheduleCursor,
-    StepDirScheduleIterator, StepDirTiming, StepDirection, StepTimeBase,
-    TimedCoordinatedJointPathProfiles, build_interval_verified_step_dir_events,
-    build_schedule_verified_step_dir_events, build_trajectory_step_events,
+    JointToStepsConverter, JointVelocityLimits, MotorStepMove, MotorSteps, PinOperationBatch,
+    PlannerError, ScheduledDirChange, ScheduledStepDirEvent, StepDirEvent, StepDirScheduleCursor,
+    StepDirScheduleIterator, StepDirTiming, StepDirection,
+    StepPinLevel::{High, Low},
+    StepTimeBase, TimedCoordinatedJointPathProfiles, build_interval_verified_step_dir_events,
+    build_pin_operation_batches, build_schedule_verified_step_dir_events,
+    build_trajectory_step_events, build_verified_pin_operation_batches,
     build_verified_trajectory_step_events, into_step_dir_events, preflight_trajectory_step_events,
 };
 
@@ -1094,5 +1096,283 @@ fn preflight_and_verified_builders_propagate_an_error_after_a_valid_event()
     );
     assert_eq!(result.err(), Some(PlannerError::MultipleStepsOnTick));
     assert_eq!(boundaries, [0, 16]);
+    Ok(())
+}
+
+#[test]
+fn both_pin_operation_builders_emit_the_expected_two_motor_sequence() -> Result<(), PlannerError> {
+    let points = points([[0.0, 0.0], [0.25, -0.25]]);
+    let limits = limits();
+    let timed = timed_path(&points, &[0.0; 2], &limits);
+    let converter = JointToStepsConverter::new(8.0, 4.0)?;
+    let timebase = StepTimeBase::new(8)?;
+    let timing = StepDirTiming::new(125_000_000, 125_000_000, 1, 1)?;
+    let mut boundaries = [0; 2];
+    let mut operations = [PinOperationBatch::new(0); 8];
+    let mut verified_boundaries = [0; 2];
+    let mut verified_operations = [PinOperationBatch::new(0); 4];
+
+    {
+        let mut batches = build_pin_operation_batches(
+            timed,
+            converter,
+            timebase,
+            timing,
+            None,
+            None,
+            &mut boundaries,
+            &mut operations,
+        )?;
+        let mut verified = build_verified_pin_operation_batches(
+            timed,
+            converter,
+            timebase,
+            timing,
+            None,
+            None,
+            &mut verified_boundaries,
+            &mut verified_operations,
+        )?;
+
+        for expected in [
+            PinOperationBatch {
+                first_direction: Some(StepDirection::Positive),
+                ..PinOperationBatch::new(2)
+            },
+            PinOperationBatch {
+                second_direction: Some(StepDirection::Negative),
+                first_step: Some(High),
+                ..PinOperationBatch::new(3)
+            },
+            PinOperationBatch {
+                first_step: Some(Low),
+                second_step: Some(High),
+                ..PinOperationBatch::new(4)
+            },
+            PinOperationBatch {
+                second_step: Some(Low),
+                ..PinOperationBatch::new(5)
+            },
+            PinOperationBatch {
+                first_step: Some(High),
+                ..PinOperationBatch::new(6)
+            },
+            PinOperationBatch {
+                first_step: Some(Low),
+                ..PinOperationBatch::new(7)
+            },
+        ] {
+            assert_eq!(batches.next(), Some(Ok(expected)));
+            assert_eq!(verified.next(), Some(Ok(expected)));
+        }
+        assert_eq!(batches.next(), None);
+        assert_eq!(verified.next(), None);
+    }
+
+    assert_eq!(boundaries, [0, 8]);
+    assert_eq!(verified_boundaries, boundaries);
+    Ok(())
+}
+
+#[test]
+fn verified_pin_operation_builder_rejects_a_late_buffer_overflow() -> Result<(), PlannerError> {
+    let points = points([[0.0, 0.0], [0.25, -0.25]]);
+    let limits = limits();
+    let timed = timed_path(&points, &[0.0; 2], &limits);
+    let converter = JointToStepsConverter::new(8.0, 4.0)?;
+    let timebase = StepTimeBase::new(8)?;
+    let timing = StepDirTiming::new(125_000_000, 125_000_000, 1, 1)?;
+    let mut boundaries = [0; 2];
+    let mut operations = [PinOperationBatch::new(0); 3];
+
+    {
+        let mut batches = build_pin_operation_batches(
+            timed,
+            converter,
+            timebase,
+            timing,
+            None,
+            None,
+            &mut boundaries,
+            &mut operations,
+        )?;
+        assert_eq!(batches.next().transpose()?.map(|batch| batch.tick), Some(2));
+        assert_eq!(batches.next().transpose()?.map(|batch| batch.tick), Some(3));
+        assert_eq!(
+            batches.next(),
+            Some(Err(PlannerError::InsufficientPinOperationBuffer))
+        );
+        assert_eq!(batches.next(), None);
+    }
+
+    let result = build_verified_pin_operation_batches(
+        timed,
+        converter,
+        timebase,
+        timing,
+        None,
+        None,
+        &mut boundaries,
+        &mut operations,
+    );
+    assert_eq!(
+        result.err(),
+        Some(PlannerError::InsufficientPinOperationBuffer)
+    );
+    Ok(())
+}
+
+#[test]
+fn verified_pin_operation_builder_rejects_steps_that_are_too_close() -> Result<(), PlannerError> {
+    let points = points([[0.0, 0.0], [0.25, -0.25]]);
+    let limits = limits();
+    let timed = timed_path(&points, &[0.0; 2], &limits);
+    let converter = JointToStepsConverter::new(8.0, 4.0)?;
+    let timebase = StepTimeBase::new(8)?;
+    let timing = StepDirTiming::new(250_000_000, 250_000_000, 1, 1)?;
+    let mut boundaries = [0; 2];
+    let mut operations = [PinOperationBatch::new(0); 8];
+
+    let result = build_verified_pin_operation_batches(
+        timed,
+        converter,
+        timebase,
+        timing,
+        None,
+        None,
+        &mut boundaries,
+        &mut operations,
+    );
+    assert_eq!(result.err(), Some(PlannerError::StepIntervalTooShort));
+    Ok(())
+}
+
+#[test]
+fn verified_pin_operation_builder_checks_and_schedules_the_dir_reversal() -> Result<(), PlannerError>
+{
+    let points = points([[0.0, 0.0], [25.0 / 16.0, 0.0], [1.0, 0.0]]);
+    let limits = limits();
+    let timed = timed_path(&points, &[0.0; 3], &limits);
+    let converter = JointToStepsConverter::new(2.0, 2.0)?;
+    let timebase = StepTimeBase::new(6)?;
+    let timing = StepDirTiming::new(1, 1, 1_000_000_000, 500_000_000)?;
+    let mut boundaries = [0; 3];
+    let mut operations = [PinOperationBatch::new(0); 8];
+
+    {
+        let mut batches = build_verified_pin_operation_batches(
+            timed,
+            converter,
+            timebase,
+            timing,
+            Some(StepDirection::Positive),
+            None,
+            &mut boundaries,
+            &mut operations,
+        )?;
+
+        for (tick, first_step, first_direction) in [
+            (5, Some(High), None),
+            (6, Some(Low), None),
+            (8, Some(High), None),
+            (9, Some(Low), None),
+            (11, Some(High), None),
+            (12, Some(Low), None),
+            (14, None, Some(StepDirection::Negative)),
+            (20, Some(High), None),
+            (21, Some(Low), None),
+        ] {
+            assert_eq!(
+                batches.next(),
+                Some(Ok(PinOperationBatch {
+                    first_direction,
+                    first_step,
+                    ..PinOperationBatch::new(tick)
+                }))
+            );
+        }
+        assert_eq!(batches.next(), None);
+    }
+
+    let longer_hold = StepDirTiming::new(1, 1, 1_000_000_000, 600_000_000)?;
+    let result = build_verified_pin_operation_batches(
+        timed,
+        converter,
+        timebase,
+        longer_hold,
+        Some(StepDirection::Positive),
+        None,
+        &mut boundaries,
+        &mut operations,
+    );
+    assert_eq!(result.err(), Some(PlannerError::DirChangeNotSchedulable));
+    Ok(())
+}
+
+#[test]
+fn verified_pin_operation_builder_accepts_zero_capacity_when_there_are_no_steps()
+-> Result<(), PlannerError> {
+    let points = points([[0.0, 0.0], [0.25, -0.25]]);
+    let limits = limits();
+    let timed = timed_path(&points, &[0.0; 2], &limits);
+    let mut boundaries = [0; 2];
+    let mut operations = [];
+
+    {
+        let mut batches = build_verified_pin_operation_batches(
+            timed,
+            JointToStepsConverter::new(1.0, 1.0)?,
+            StepTimeBase::new(8)?,
+            StepDirTiming::new(1, 1, 1, 1)?,
+            None,
+            None,
+            &mut boundaries,
+            &mut operations,
+        )?;
+        assert_eq!(batches.next(), None);
+    }
+
+    assert_eq!(boundaries, [0, 8]);
+    Ok(())
+}
+
+#[test]
+fn verified_pin_operation_builder_keeps_the_falling_edge_after_the_trajectory_end()
+-> Result<(), PlannerError> {
+    let points = points([[0.0, 0.0], [9.0 / 16.0, 0.0]]);
+    let limits = limits();
+    let timed = timed_path(&points, &[0.0; 2], &limits);
+    let mut boundaries = [0; 2];
+    let mut operations = [PinOperationBatch::new(0); 3];
+
+    {
+        let mut batches = build_verified_pin_operation_batches(
+            timed,
+            JointToStepsConverter::new(1.0, 1.0)?,
+            StepTimeBase::new(1)?,
+            StepDirTiming::new(1, 1, 1, 1)?,
+            None,
+            None,
+            &mut boundaries,
+            &mut operations,
+        )?;
+        for (tick, first_direction, first_step) in [
+            (1, Some(StepDirection::Positive), None),
+            (2, None, Some(High)),
+            (3, None, Some(Low)),
+        ] {
+            assert_eq!(
+                batches.next(),
+                Some(Ok(PinOperationBatch {
+                    first_direction,
+                    first_step,
+                    ..PinOperationBatch::new(tick)
+                }))
+            );
+        }
+        assert_eq!(batches.next(), None);
+    }
+
+    assert_eq!(boundaries, [0, 2]);
     Ok(())
 }

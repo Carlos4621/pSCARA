@@ -50,6 +50,8 @@ pub enum PlannerError {
     InvalidStepDirTiming,
     /// Dos flancos STEP consecutivos no respetan el intervalo mínimo.
     StepIntervalTooShort,
+    /// No existe un tick válido para cambiar DIR entre dos pulsos.
+    DirChangeNotSchedulable,
 }
 
 impl PlannerError {

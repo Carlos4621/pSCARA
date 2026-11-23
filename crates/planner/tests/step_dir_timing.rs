@@ -133,3 +133,65 @@ fn dir_setup_and_hold_detect_results_above_u64_max() {
         assert_eq!(timing.min_dir_hold_ticks(timebase), expected_hold);
     }
 }
+
+#[test]
+fn dir_change_window_checks_setup_hold_and_tick_order() {
+    let timing = StepDirTiming::new(2_000, 2_000, 3_000, 2_000).unwrap();
+    let timebase = StepTimeBase::new(1_000_000).unwrap();
+    let unschedulable = Err(PlannerError::DirChangeNotSchedulable);
+
+    for (previous, next, expected) in [
+        (None, 10, Ok((0, 7))),
+        (None, 3, Ok((0, 0))),
+        (Some(100), 110, Ok((102, 107))),
+        (Some(100), 105, Ok((102, 102))),
+        (Some(100), 104, unschedulable),
+        (Some(100), 100, Err(PlannerError::InvalidTicks)),
+        (Some(100), 99, Err(PlannerError::InvalidTicks)),
+        (None, 2, unschedulable),
+    ] {
+        assert_eq!(
+            timing.dir_change_window(previous, next, timebase),
+            expected,
+            "previous={previous:?}, next={next}"
+        );
+    }
+}
+
+#[test]
+fn dir_change_window_checks_tick_addition_near_u64_max() {
+    let timing = StepDirTiming::new(2_000, 2_000, 3_000, 2_000).unwrap();
+    let timebase = StepTimeBase::new(1_000_000).unwrap();
+    let max = u64::MAX;
+    let unschedulable = Err(PlannerError::DirChangeNotSchedulable);
+
+    for (previous, expected) in [
+        (Some(max - 5), Ok((max - 3, max - 3))),
+        (Some(max - 2), unschedulable),
+        (Some(max - 1), unschedulable),
+        (Some(max), Err(PlannerError::InvalidTicks)),
+    ] {
+        assert_eq!(
+            timing.dir_change_window(previous, max, timebase),
+            expected,
+            "previous={previous:?}"
+        );
+    }
+}
+
+#[test]
+fn dir_change_window_propagates_conversion_errors_for_applicable_constraints() {
+    let timebase = StepTimeBase::new(2_000_000_000).unwrap();
+    let long_hold = StepDirTiming::new(1, 1, 1, u64::MAX).unwrap();
+    let long_setup = StepDirTiming::new(1, 1, u64::MAX, 1).unwrap();
+
+    assert_eq!(long_hold.dir_change_window(None, 10, timebase), Ok((0, 8)));
+    assert_eq!(
+        long_hold.dir_change_window(Some(0), u64::MAX, timebase),
+        Err(PlannerError::NumericalFailure)
+    );
+    assert_eq!(
+        long_setup.dir_change_window(None, u64::MAX, timebase),
+        Err(PlannerError::NumericalFailure)
+    );
+}

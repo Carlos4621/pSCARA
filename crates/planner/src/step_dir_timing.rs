@@ -78,6 +78,39 @@ impl StepDirTiming {
     pub fn min_dir_hold_ticks(&self, timebase: StepTimeBase) -> Result<u64, PlannerError> {
         nanoseconds_to_ticks(self.dir_hold_ns, timebase)
     }
+
+    /// Devuelve los límites inclusivos de la ventana para cambiar DIR.
+    /// Sin un pulso anterior, la ventana empieza en el tick cero.
+    ///
+    /// Devuelve [`PlannerError::InvalidTicks`] si los pulsos tienen ticks iguales o decrecientes,
+    /// y [`PlannerError::DirChangeNotSchedulable`] si la ventana queda vacía.
+    /// Propaga los errores al convertir los requisitos aplicables a ticks.
+    pub fn dir_change_window(
+        &self,
+        previous_step_tick: Option<u64>,
+        next_step_tick: u64,
+        timebase: StepTimeBase,
+    ) -> Result<(u64, u64), PlannerError> {
+        if previous_step_tick.is_some_and(|previous| previous >= next_step_tick) {
+            return Err(PlannerError::InvalidTicks);
+        }
+
+        let earliest_tick = match previous_step_tick {
+            Some(previous) => previous
+                .checked_add(self.min_dir_hold_ticks(timebase)?)
+                .ok_or(PlannerError::DirChangeNotSchedulable)?,
+            None => 0,
+        };
+        let latest_tick = next_step_tick
+            .checked_sub(self.min_dir_setup_ticks(timebase)?)
+            .ok_or(PlannerError::DirChangeNotSchedulable)?;
+
+        if earliest_tick > latest_tick {
+            return Err(PlannerError::DirChangeNotSchedulable);
+        }
+
+        Ok((earliest_tick, latest_tick))
+    }
 }
 
 fn nanoseconds_to_ticks(nanoseconds: u64, timebase: StepTimeBase) -> Result<u64, PlannerError> {

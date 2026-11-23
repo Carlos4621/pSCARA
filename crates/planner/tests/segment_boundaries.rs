@@ -1,7 +1,9 @@
 use kinematics::JointAngles;
 use planner::{
-    CoordinatedJointPathProfiles, JointAccelerationLimits, JointVelocityLimits, PlannerError,
-    StepTimeBase, TimedCoordinatedJointPathProfiles, generate_segment_boundaries,
+    CoordinatedJointPathProfiles, CoordinatedJointTrajectory, JointAccelerationLimits,
+    JointToStepsConverter, JointVelocityLimits, MotorStepMove, PlannerError,
+    SegmentedTrajectoryStepEventIterator, StepTimeBase, TimedCoordinatedJointPathProfiles,
+    generate_guarded_segment_boundaries, generate_segment_boundaries,
 };
 
 const UNWRITTEN: u64 = 12_345;
@@ -224,4 +226,173 @@ fn propagates_tick_overflow_without_writing_an_earlier_valid_boundary() {
         Err(PlannerError::NumericalFailure)
     );
     assert_eq!(buffer, [UNWRITTEN; 3]);
+}
+
+#[test]
+fn guarded_boundaries_surround_an_off_grid_reversal_at_three_hertz() -> Result<(), PlannerError> {
+    let points = points([0.0, 25.0 / 16.0, 1.0]);
+    let limits = limits();
+    let timed = timed_path(&points, &[0.0; 3], &limits);
+    let base = StepTimeBase::new(3)?;
+    let mut buffer = [UNWRITTEN; 6];
+
+    assert_eq!(end_times(timed), [2.5, 4.0]);
+    let count = generate_guarded_segment_boundaries(timed, base, &mut buffer)?;
+    assert_eq!(count, 4);
+    assert_eq!(buffer, [0, 7, 8, 12, UNWRITTEN, UNWRITTEN]);
+
+    let trajectory = CoordinatedJointTrajectory::new(timed)?;
+    let converter = JointToStepsConverter::new(2.0, 2.0)?;
+    let sample = |tick| converter.convert(trajectory.position_at(base.ticks_to_seconds(tick))?);
+    let initial = sample(0)?;
+
+    let mut expected = Vec::new();
+    let mut previous = initial;
+    for tick in 1..=12 {
+        let position = sample(tick)?;
+        if position != previous {
+            expected.push((tick, MotorStepMove::new(previous, position)));
+        }
+        previous = position;
+    }
+    assert_eq!(
+        expected.iter().map(|&(tick, _)| tick).collect::<Vec<_>>(),
+        [3, 4, 6, 10]
+    );
+
+    let events = SegmentedTrajectoryStepEventIterator::new(&buffer[..count], initial, sample)?
+        .collect::<Result<Vec<_>, _>>()?;
+    assert_eq!(events, expected);
+    Ok(())
+}
+
+#[test]
+fn guarded_boundaries_write_an_aligned_internal_tick_once() {
+    let points = points([0.0, 25.0 / 16.0, 1.0]);
+    let limits = limits();
+    let timed = timed_path(&points, &[0.0; 3], &limits);
+    let base = StepTimeBase::new(8).unwrap();
+    let mut buffer = [UNWRITTEN; 3];
+
+    assert_eq!(
+        generate_guarded_segment_boundaries(timed, base, &mut buffer),
+        Ok(3)
+    );
+    assert_eq!(buffer, [0, 20, 32]);
+}
+
+#[test]
+fn guarded_boundaries_share_ticks_with_close_junctions_and_endpoints() {
+    let limits = limits();
+    let base = StepTimeBase::new(1).unwrap();
+
+    for (coordinates, ends, expected) in [
+        (
+            [0.0, 1.0 / 64.0, 2.0 / 64.0, 6.0 / 64.0],
+            [0.25, 0.5, 1.0],
+            &[0, 1][..],
+        ),
+        (
+            [0.0, 81.0 / 64.0, 82.0 / 64.0, 86.0 / 64.0],
+            [2.25, 2.5, 3.0],
+            &[0, 2, 3][..],
+        ),
+    ] {
+        let points = points(coordinates);
+        let timed = timed_path(&points, &[0.0; 4], &limits);
+        let mut buffer = [UNWRITTEN; 3];
+        let output = &mut buffer[..expected.len()];
+
+        assert_eq!(end_times(timed), ends);
+        assert_eq!(
+            generate_guarded_segment_boundaries(timed, base, output),
+            Ok(expected.len())
+        );
+        assert_eq!(output, expected);
+        assert!(
+            buffer[expected.len()..]
+                .iter()
+                .all(|&tick| tick == UNWRITTEN)
+        );
+    }
+}
+
+#[test]
+fn guarded_boundaries_check_capacity_after_adding_both_internal_ticks() {
+    let points = points([0.0, 25.0 / 16.0, 1.0]);
+    let limits = limits();
+    let timed = timed_path(&points, &[0.0; 3], &limits);
+    let base = StepTimeBase::new(3).unwrap();
+    let mut buffer = [UNWRITTEN; 4];
+
+    for capacity in 0..buffer.len() {
+        assert_eq!(
+            generate_guarded_segment_boundaries(timed, base, &mut buffer[..capacity]),
+            Err(PlannerError::InsufficientBoundaryBuffer),
+            "capacity {capacity}"
+        );
+        assert_eq!(buffer, [UNWRITTEN; 4]);
+    }
+
+    assert_eq!(
+        generate_guarded_segment_boundaries(timed, base, &mut buffer),
+        Ok(4)
+    );
+    assert_eq!(buffer, [0, 7, 8, 12]);
+}
+
+#[test]
+fn guarded_boundaries_reject_an_off_grid_final_time_before_writing() {
+    let points = points([0.0, 25.0 / 16.0, 21.0 / 16.0]);
+    let limits = limits();
+    let timed = timed_path(&points, &[0.0; 3], &limits);
+    let base = StepTimeBase::new(3).unwrap();
+    let mut buffer = [UNWRITTEN; 6];
+
+    assert_eq!(end_times(timed), [2.5, 3.5]);
+    assert_eq!(
+        generate_guarded_segment_boundaries(timed, base, &mut buffer),
+        Err(PlannerError::InvalidTicks)
+    );
+    assert_eq!(buffer, [UNWRITTEN; 6]);
+}
+
+#[test]
+fn guarded_boundaries_require_an_unstarted_and_nonempty_timed_path() {
+    let points = points([0.0, 25.0 / 16.0, 1.0]);
+    let limits = limits();
+    let mut timed = timed_path(&points, &[0.0; 3], &limits);
+    let base = StepTimeBase::new(3).unwrap();
+    let mut buffer = [UNWRITTEN; 4];
+
+    for error in [PlannerError::InvalidTime, PlannerError::InsufficientPoints] {
+        timed.next().unwrap().unwrap();
+        assert_eq!(
+            generate_guarded_segment_boundaries(timed, base, &mut buffer),
+            Err(error)
+        );
+        assert_eq!(buffer, [UNWRITTEN; 4]);
+    }
+}
+
+#[test]
+fn guarded_boundaries_accept_the_maximum_tick_and_propagate_overflow() {
+    let points = points([0.0, 0.25, 0.5]);
+    let limits = limits();
+    let base = StepTimeBase::new(u64::MAX).unwrap();
+    let mut buffer = [UNWRITTEN; 3];
+
+    let one_segment = timed_path(&points[..2], &[0.0; 2], &limits);
+    assert_eq!(
+        generate_guarded_segment_boundaries(one_segment, base, &mut buffer),
+        Ok(2)
+    );
+    assert_eq!(buffer, [0, u64::MAX, UNWRITTEN]);
+
+    let two_segments = timed_path(&points, &[0.0; 3], &limits);
+    assert_eq!(
+        generate_guarded_segment_boundaries(two_segments, base, &mut buffer),
+        Err(PlannerError::NumericalFailure)
+    );
+    assert_eq!(buffer, [0, u64::MAX, UNWRITTEN]);
 }

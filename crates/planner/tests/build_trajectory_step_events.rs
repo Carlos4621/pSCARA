@@ -318,6 +318,31 @@ fn an_insufficient_boundary_buffer_is_untouched_and_can_be_retried() {
 }
 
 #[test]
+fn rejects_an_off_grid_end_even_with_a_sufficient_clock() -> Result<(), PlannerError> {
+    let points = points([[0.0, 0.0], [9.0 / 16.0, 0.0]]);
+    let limits = limits();
+    let timed = timed_path(&points, &[0.0; 2], &limits);
+    let timebase = StepTimeBase::new(1)?;
+    let converter = JointToStepsConverter::new(1.0, 1.0)?;
+
+    let mut profiles = timed;
+    let profile = profiles.next().expect("one profile")?;
+    let end_time = profile.end_time()?;
+    assert_eq!(end_time, 1.5);
+    assert_eq!(
+        converter.peak_step_frequencies(profile.peak_joint_velocities()?)?,
+        (0.75, 0.0)
+    );
+    assert_eq!(timebase.bracketing_ticks(end_time)?, (1, 2));
+
+    let mut boundaries = [19, 23];
+    let result = build_trajectory_step_events(timed, converter, timebase, &mut boundaries);
+    assert_eq!(result.err(), Some(PlannerError::InvalidTicks));
+    assert_eq!(boundaries, [19, 23]);
+    Ok(())
+}
+
+#[test]
 fn invalid_tick_boundaries_and_tick_overflow_are_construction_errors() {
     let limits = limits();
     for (last_point, frequency, error) in [

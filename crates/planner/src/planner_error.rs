@@ -52,6 +52,8 @@ pub enum PlannerError {
     StepIntervalTooShort,
     /// No existe un tick válido para cambiar DIR entre dos pulsos.
     DirChangeNotSchedulable,
+    /// Dos operaciones contradictorias sobre el mismo pin en un tick.
+    ConflictingPinOperations,
 }
 
 impl PlannerError {

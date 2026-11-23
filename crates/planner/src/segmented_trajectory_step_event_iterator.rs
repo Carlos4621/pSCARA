@@ -22,8 +22,8 @@ impl<'a, F> SegmentedTrajectoryStepEventIterator<'a, F> {
             return Err(PlannerError::BoundariesWithoutFrontiers);
         }
 
-        if !boundaries.windows(2).all(|w| w[0] <= w[1]) {
-            return Err(PlannerError::TimeWentBackwards);
+        if !boundaries.windows(2).all(|w| w[0] < w[1]) {
+            return Err(PlannerError::InvalidTicks);
         }
 
         Ok(Self {

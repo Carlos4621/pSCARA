@@ -60,7 +60,7 @@ fn rejects_slices_with_fewer_than_two_boundaries() {
 }
 
 #[test]
-fn accepts_equal_boundaries_at_any_segment() {
+fn rejects_duplicate_boundaries_at_any_segment() {
     for boundaries in [
         &[0, 0][..],
         &[u64::MAX, u64::MAX][..],
@@ -75,7 +75,11 @@ fn accepts_equal_boundaries_at_any_segment() {
             unexpected_sample,
         );
 
-        assert_eq!(result.err(), None, "{boundaries:?}");
+        assert_eq!(
+            result.err(),
+            Some(PlannerError::InvalidTicks),
+            "{boundaries:?}"
+        );
     }
 }
 
@@ -97,7 +101,7 @@ fn rejects_decreasing_boundaries_at_any_segment() {
 
         assert_eq!(
             result.err(),
-            Some(PlannerError::TimeWentBackwards),
+            Some(PlannerError::InvalidTicks),
             "{boundaries:?}"
         );
     }

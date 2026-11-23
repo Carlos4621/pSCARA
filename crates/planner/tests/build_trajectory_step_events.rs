@@ -454,34 +454,26 @@ fn an_unrepresentable_initial_motor_position_fails_before_writing_boundaries() {
 }
 
 #[test]
-fn motor_position_overflow_during_iteration_follows_the_valid_prefix() {
+fn rejects_later_motor_position_overflow_before_iteration() -> Result<(), PlannerError> {
     // Start the second motor at its last representable positive position.
     let initial_second = 1.0_f64.next_down();
     let points = points([[0.0, initial_second], [0.25, initial_second], [0.25, 1.0]]);
     let (velocity, _) = limits();
-    let acceleration = JointAccelerationLimits::new(1.0, 1.0 - initial_second).unwrap();
+    let acceleration = JointAccelerationLimits::new(1.0, 1.0 - initial_second)?;
     let limits = (velocity, acceleration);
     let timed = timed_path(&points, &[0.0; 3], &limits);
-    let timebase = StepTimeBase::new(2048).unwrap();
+    let timebase = StepTimeBase::new(2048)?;
     let mut boundaries = [19, 23, 29];
-    {
-        let mut events = build_trajectory_step_events(
-            timed,
-            JointToStepsConverter::new(4.0, i64::MAX as f64).unwrap(),
-            timebase,
-            &mut boundaries,
-        )
-        .unwrap();
+    let result = build_trajectory_step_events(
+        timed,
+        JointToStepsConverter::new(4.0, i64::MAX as f64)?,
+        timebase,
+        &mut boundaries,
+    );
 
-        assert_eq!(
-            events.next(),
-            Some(Ok((1024, MotorStepMove::new(steps(0, 0), steps(1, 0)))))
-        );
-        assert_eq!(events.next(), Some(Err(PlannerError::NumericalFailure)));
-        assert_eq!(events.next(), None);
-        assert_eq!(events.next(), None);
-    }
-    assert_eq!(boundaries, [0, 2048, 6144]);
+    assert_eq!(result.err(), Some(PlannerError::NumericalFailure));
+    assert_eq!(boundaries, [19, 23, 29]);
+    Ok(())
 }
 
 #[test]

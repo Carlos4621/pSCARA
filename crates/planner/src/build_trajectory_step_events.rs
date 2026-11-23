@@ -10,6 +10,7 @@ pub fn build_trajectory_step_events<'a>(
 ) -> Result<SegmentedTrajectoryStepEventIterator<'a, impl Fn(u64) -> Result<MotorSteps, PlannerError>>, PlannerError> {
     let trajectory = CoordinatedJointTrajectory::new(profiles)?;
 
+    validate_motor_position_range(profiles, &converter)?;
     validate_subtick_boundaries(profiles, &trajectory, &converter, timebase)?;
     validate_step_frequencies(profiles, &converter, timebase)?;
 
@@ -32,10 +33,6 @@ pub fn build_trajectory_step_events<'a>(
     )
 }
 
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "Pendiente de integrar con el constructor público")
-)]
 fn validate_motor_position_range(
     profiles: TimedCoordinatedJointPathProfiles<'_>,
     converter: &JointToStepsConverter,

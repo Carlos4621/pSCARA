@@ -146,6 +146,54 @@ fn a_two_motor_round_trip_replays_unequal_pulse_counts() -> Result<(), PlannerEr
 }
 
 #[test]
+fn builds_step_events_for_a_reversal_between_ticks() -> Result<(), PlannerError> {
+    let points = points([[0.0, 0.0], [25.0 / 16.0, 0.0], [1.0, 0.0]]);
+    let limits = limits();
+    let timed = timed_path(&points, &[0.0; 3], &limits);
+    let base = StepTimeBase::new(3)?;
+    let trajectory = CoordinatedJointTrajectory::new(timed)?;
+    let converter = JointToStepsConverter::new(2.0, 2.0)?;
+    let sample = |tick| converter.convert(trajectory.position_at(base.ticks_to_seconds(tick))?);
+
+    let mut expected = Vec::new();
+    let mut previous = sample(0)?;
+    for tick in 1..=12 {
+        let position = sample(tick)?;
+        if position != previous {
+            expected.push((tick, MotorStepMove::new(previous, position)));
+        }
+        previous = position;
+    }
+
+    let mut boundaries = [u64::MAX; 4];
+    let events = build_trajectory_step_events(timed, converter, base, &mut boundaries)?
+        .collect::<Result<Vec<_>, _>>()?;
+    assert_eq!(boundaries, [0, 7, 8, 12]);
+    assert_eq!(events, expected);
+    assert_eq!(
+        events
+            .iter()
+            .map(|&(tick, movement)| {
+                let first = movement.first();
+                (
+                    tick,
+                    first.direction,
+                    first.pulses,
+                    movement.second().pulses,
+                )
+            })
+            .collect::<Vec<_>>(),
+        [
+            (3, StepDirection::Positive, 1, 0),
+            (4, StepDirection::Positive, 1, 0),
+            (6, StepDirection::Positive, 1, 0),
+            (10, StepDirection::Negative, 1, 0),
+        ]
+    );
+    Ok(())
+}
+
+#[test]
 fn a_trajectory_that_quantizes_to_no_steps_exhausts_at_the_clock_limits() {
     let points = points([[0.0, 0.0], [0.25, -0.25]]);
     let limits = limits();

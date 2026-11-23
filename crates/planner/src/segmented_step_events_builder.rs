@@ -1,10 +1,5 @@
 use crate::{
-    MotorSteps,
-    PlannerError,
-    SegmentedTrajectoryStepEventIterator,
-    StepTimeBase,
-    TimedCoordinatedJointPathProfiles,
-    generate_segment_boundaries,
+    MotorSteps, PlannerError, SegmentedTrajectoryStepEventIterator, StepTimeBase, TimedCoordinatedJointPathProfiles, generate_guarded_segment_boundaries,
 };
 
 pub fn build_segmented_step_events<'a, F>(
@@ -17,7 +12,7 @@ pub fn build_segmented_step_events<'a, F>(
 where
     F: FnMut(u64) -> Result<MotorSteps, PlannerError>,
 {
-    let count = generate_segment_boundaries(
+    let count = generate_guarded_segment_boundaries(
         profiles,
         timebase,
         boundaries_buffer,

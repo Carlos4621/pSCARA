@@ -246,6 +246,7 @@ fn the_constructor_accepts_and_preserves_positive_frequency_limits() {
     ];
     for frequency in frequencies {
         let base = StepTimeBase::new(frequency).unwrap();
+        assert_eq!(base.ticks_per_second(), frequency);
         assert_eq!(
             base.seconds_to_ticks(1.0),
             Ok(frequency),

@@ -43,6 +43,14 @@ fn slow_profile(velocity: f64) -> CoordinatedJointMotionProfile {
 }
 
 #[test]
+fn peak_joint_velocities_are_independent_of_the_start_time() {
+    for start in [0.0, 0.5, 10.0] {
+        let timed = TimedCoordinatedJointProfile::new(start, profile()).unwrap();
+        assert_eq!(timed.peak_joint_velocities(), Ok((4.0, 2.0)));
+    }
+}
+
+#[test]
 fn constructor_preserves_start_time_bits_including_signed_zero() {
     for start in [
         0.0,

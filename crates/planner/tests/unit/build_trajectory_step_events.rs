@@ -1,6 +1,9 @@
 use kinematics::JointAngles;
 
-use super::{validate_subtick_boundaries, validate_subtick_boundary, validate_subtick_excursion};
+use super::{
+    validate_step_frequencies, validate_subtick_boundaries, validate_subtick_boundary,
+    validate_subtick_excursion,
+};
 use crate::{
     CoordinatedJointPathProfiles, CoordinatedJointTrajectory, JointAccelerationLimits,
     JointToStepsConverter, JointVelocityLimits, MotorSteps, PlannerError, StepTimeBase,
@@ -11,6 +14,10 @@ fn steps(first: i64, second: i64) -> MotorSteps {
     MotorSteps { first, second }
 }
 
+fn angles([first, second]: [f64; 2]) -> JointAngles {
+    JointAngles::new(first, second).unwrap()
+}
+
 fn limits() -> Result<(JointVelocityLimits, JointAccelerationLimits), PlannerError> {
     Ok((
         JointVelocityLimits::new(10.0, 10.0)?,
@@ -18,10 +25,19 @@ fn limits() -> Result<(JointVelocityLimits, JointAccelerationLimits), PlannerErr
     ))
 }
 
-fn timed_trajectory<'a>(
+fn timed_profiles<'a>(
     points: &'a [JointAngles],
     speeds: &'a [f64],
     (velocity, acceleration): &'a (JointVelocityLimits, JointAccelerationLimits),
+) -> Result<TimedCoordinatedJointPathProfiles<'a>, PlannerError> {
+    let profiles = CoordinatedJointPathProfiles::new(points, speeds, velocity, acceleration)?;
+    TimedCoordinatedJointPathProfiles::new(profiles)
+}
+
+fn timed_trajectory<'a>(
+    points: &'a [JointAngles],
+    speeds: &'a [f64],
+    limits: &'a (JointVelocityLimits, JointAccelerationLimits),
 ) -> Result<
     (
         TimedCoordinatedJointPathProfiles<'a>,
@@ -29,9 +45,124 @@ fn timed_trajectory<'a>(
     ),
     PlannerError,
 > {
-    let profiles = CoordinatedJointPathProfiles::new(points, speeds, velocity, acceleration)?;
-    let timed = TimedCoordinatedJointPathProfiles::new(profiles)?;
+    let timed = timed_profiles(points, speeds, limits)?;
     Ok((timed, CoordinatedJointTrajectory::new(timed)?))
+}
+
+#[test]
+fn step_frequencies_must_be_strictly_below_the_clock() -> Result<(), PlannerError> {
+    let points = [[0.0, 0.0], [4.0, -2.0]].map(angles);
+    let limits = limits()?;
+    let timed = timed_profiles(&points, &[0.0; 2], &limits)?;
+    let converter = JointToStepsConverter::new(400.0, 400.0)?;
+    let mut profiles = timed;
+    let profile = profiles.next().expect("one profile")?;
+    assert_eq!(
+        converter.peak_step_frequencies(profile.peak_joint_velocities()?)?,
+        (800.0, 400.0)
+    );
+
+    let insufficient = Err(PlannerError::InsufficientTicksForSteps);
+    for (clock, expected) in [
+        (1000, Ok(())),
+        (801, Ok(())),
+        (800, insufficient),
+        (500, insufficient),
+    ] {
+        assert_eq!(
+            validate_step_frequencies(timed, &converter, StepTimeBase::new(clock)?),
+            expected,
+            "clock {clock} Hz"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn a_later_profile_can_exceed_the_clock_on_the_second_motor_alone() -> Result<(), PlannerError> {
+    let points = [[0.0, 0.0], [1.0, 0.0], [3.0, -4.0]].map(angles);
+    let limits = limits()?;
+    let timed = timed_profiles(&points, &[0.0; 3], &limits)?;
+    let converter = JointToStepsConverter::new(400.0, 400.0)?;
+
+    for (profile, expected) in timed.zip([(400.0, 0.0), (400.0, 800.0)]) {
+        assert_eq!(
+            converter.peak_step_frequencies(profile?.peak_joint_velocities()?)?,
+            expected
+        );
+    }
+    assert_eq!(
+        validate_step_frequencies(timed, &converter, StepTimeBase::new(500)?),
+        Err(PlannerError::InsufficientTicksForSteps)
+    );
+    assert_eq!(
+        validate_step_frequencies(timed, &converter, StepTimeBase::new(801)?),
+        Ok(())
+    );
+    Ok(())
+}
+
+#[test]
+fn a_fractional_step_frequency_just_below_the_clock_is_accepted() -> Result<(), PlannerError> {
+    let points = [[0.0, 0.0], [1.0, 0.0]].map(angles);
+    let limits = limits()?;
+    let timed = timed_profiles(&points, &[0.0; 2], &limits)?;
+    let timebase = StepTimeBase::new(800)?;
+    let insufficient = Err(PlannerError::InsufficientTicksForSteps);
+
+    for (frequency, expected) in [
+        (800.0_f64.next_down(), Ok(())),
+        (800.0, insufficient),
+        (800.0_f64.next_up(), insufficient),
+    ] {
+        let converter = JointToStepsConverter::new(frequency, 1.0)?;
+        assert_eq!(
+            validate_step_frequencies(timed, &converter, timebase),
+            expected
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn step_frequency_comparison_preserves_large_integer_clock_values() -> Result<(), PlannerError> {
+    let points = [[0.0, 0.0], [1.0, 0.0]].map(angles);
+    let limits = limits()?;
+    let timed = timed_profiles(&points, &[0.0; 2], &limits)?;
+    let exact_tick = 1_u64 << 53;
+    let outside_range = (1_u128 << 64) as f64;
+    let insufficient = Err(PlannerError::InsufficientTicksForSteps);
+
+    for (frequency, clock, expected) in [
+        (exact_tick as f64, exact_tick, insufficient),
+        (exact_tick as f64, exact_tick + 1, Ok(())),
+        ((exact_tick + 2) as f64, exact_tick + 1, insufficient),
+        (outside_range.next_down(), u64::MAX, Ok(())),
+        (outside_range, u64::MAX, insufficient),
+        (f64::MAX, u64::MAX, insufficient),
+    ] {
+        let converter = JointToStepsConverter::new(frequency, 1.0)?;
+        assert_eq!(
+            validate_step_frequencies(timed, &converter, StepTimeBase::new(clock)?),
+            expected,
+            "step frequency {frequency}, clock {clock} Hz"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn step_frequency_validation_propagates_conversion_overflow() -> Result<(), PlannerError> {
+    let points = [[0.0, 0.0], [4.0, 0.0]].map(angles);
+    let limits = limits()?;
+    let timed = timed_profiles(&points, &[0.0; 2], &limits)?;
+    let converter = JointToStepsConverter::new(f64::MAX, 1.0)?;
+
+    assert_eq!(
+        validate_step_frequencies(timed, &converter, StepTimeBase::new(u64::MAX)?),
+        Err(PlannerError::NumericalFailure)
+    );
+    Ok(())
 }
 
 #[test]

@@ -33,6 +33,30 @@ pub fn build_trajectory_step_events<'a>(
 
 #[cfg_attr(
     not(test),
+    expect(dead_code, reason = "Pendiente de integrar con el constructor público")
+)]
+fn validate_step_frequencies(
+    profiles: TimedCoordinatedJointPathProfiles<'_>,
+    converter: &JointToStepsConverter,
+    timebase: StepTimeBase,
+) -> Result<(), PlannerError> {
+    let clock_frequency = timebase.ticks_per_second();
+    for profile in profiles {
+        let joint_velocities = profile?.peak_joint_velocities()?;
+        let (first, second) = converter.peak_step_frequencies(joint_velocities)?;
+
+        // Las frecuencias son finitas y no negativas. Truncarlas conserva
+        // la comparación con un umbral entero, y saturar a u64::MAX también
+        // rechaza las frecuencias que superan el rango de u64.
+        if first as u64 >= clock_frequency || second as u64 >= clock_frequency {
+            return Err(PlannerError::InsufficientTicksForSteps);
+        }
+    }
+    Ok(())
+}
+
+#[cfg_attr(
+    not(test),
     expect(dead_code, reason = "Las pruebas comparan ambos validadores")
 )]
 fn validate_subtick_boundary(

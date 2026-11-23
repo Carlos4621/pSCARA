@@ -14,6 +14,10 @@ impl StepTimeBase {
         Ok(Self { ticks_per_second })
     }
 
+    pub fn ticks_per_second(&self) -> u64 {
+        self.ticks_per_second
+    }
+
     /// Convierte ticks a segundos como el `f64` más cercano al cociente exacto.
     /// En caso de empate, elige el valor con significando par.
     pub fn ticks_to_seconds(&self, ticks: u64) -> f64 {

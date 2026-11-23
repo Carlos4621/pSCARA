@@ -39,6 +39,11 @@ impl TimedCoordinatedJointProfile {
         self.profile.velocity_at(self.get_local_time(global_time)?)
     }
 
+    /// Devuelve las magnitudes máximas de velocidad del perfil en rad/s.
+    pub fn peak_joint_velocities(&self) -> Result<(f64, f64), PlannerError> {
+        self.profile.peak_joint_velocities()
+    }
+
     pub fn acceleration_at(&self, global_time: f64) -> Result<(f64, f64), PlannerError> {
         self.profile.acceleration_at(self.get_local_time(global_time)?)
     }  

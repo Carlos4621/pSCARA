@@ -8,7 +8,7 @@ use planner::{
     CoordinatedJointPathProfiles, CoordinatedJointTrajectory, JointAccelerationLimits,
     JointToStepsConverter, JointVelocityLimits, MotorStepMove, MotorSteps, PlannerError,
     SegmentedTrajectoryStepEventIterator, StepTimeBase, TimedCoordinatedJointPathProfiles,
-    generate_segment_boundaries,
+    build_segmented_step_events,
 };
 
 fn steps(first: i64, second: i64) -> MotorSteps {
@@ -213,19 +213,13 @@ fn a_real_round_trip_emits_the_same_events_as_tick_by_tick_sampling() -> Result<
     let timed = TimedCoordinatedJointPathProfiles::new(profiles)?;
     let timebase = StepTimeBase::new(8)?;
 
-    let mut boundaries = [0_u64; 3];
-    let count = generate_segment_boundaries(timed, timebase, &mut boundaries)?;
-    assert_eq!(count, boundaries.len());
-    assert_eq!(boundaries, [0, 16, 32]);
-
     let trajectory = CoordinatedJointTrajectory::new(timed)?;
     let converter = JointToStepsConverter::new(4.0, 4.0)?;
     let sample = |tick| converter.convert(trajectory.position_at(timebase.ticks_to_seconds(tick))?);
-    let [start_tick, _, end_tick] = boundaries;
-    let initial = sample(start_tick)?;
+    let initial = sample(0)?;
     let mut expected = Vec::new();
     let mut previous = initial;
-    for tick in start_tick + 1..=end_tick {
+    for tick in 1..=32 {
         let position = sample(tick)?;
         if previous != position {
             expected.push((tick, MotorStepMove::new(previous, position)));
@@ -238,11 +232,13 @@ fn a_real_round_trip_emits_the_same_events_as_tick_by_tick_sampling() -> Result<
         [4, 7, 10, 12, 21, 23, 26, 29]
     );
 
+    let mut boundaries = [19, 23, 29, 48, 64];
     let mut iterator =
-        SegmentedTrajectoryStepEventIterator::new(&boundaries[..count], initial, sample)?;
+        build_segmented_step_events(timed, timebase, &mut boundaries, initial, sample)?;
     for event in expected {
         assert_eq!(iterator.next(), Some(Ok(event)));
     }
     assert_exhausted(&mut iterator);
+    assert_eq!(boundaries, [0, 16, 32, 48, 64]);
     Ok(())
 }

@@ -93,3 +93,6 @@ pub use segmented_trajectory_step_event_iterator::SegmentedTrajectoryStepEventIt
 
 mod segment_boundaries;
 pub use segment_boundaries::generate_segment_boundaries;
+
+mod segmented_step_events_builder;
+pub use segmented_step_events_builder::build_segmented_step_events;

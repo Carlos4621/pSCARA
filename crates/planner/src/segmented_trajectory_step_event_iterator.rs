@@ -102,7 +102,7 @@ where
     }
 }
 
-impl<'a, F> FusedIterator for SegmentedTrajectoryStepEventIterator<'_, F> where
+impl<F> FusedIterator for SegmentedTrajectoryStepEventIterator<'_, F> where
     F: FnMut(u64) -> Result<MotorSteps, PlannerError>
 {
 }

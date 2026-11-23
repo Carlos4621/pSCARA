@@ -1,7 +1,7 @@
 use crate::{ExecutorError, PinFrame};
 
 const LEVEL_BITS: u32 = 4;
-const LEVEL_MASK: u8 = (1 << LEVEL_BITS) - 1;
+pub(crate) const LEVEL_MASK: u8 = (1 << LEVEL_BITS) - 1;
 
 /// Trama con 28 bits de espera en la parte alta y cuatro bits de niveles en la parte baja.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -26,6 +26,12 @@ impl PackedPinFrame {
     pub const fn delay_ticks(&self) -> u64 {
         (self.0 >> LEVEL_BITS) as u64
     }
+
+    /// Empaqueta una espera y unos niveles que caben en sus respectivos campos.
+    pub(crate) fn from_valid_parts(delay_ticks: u64, levels: u8) -> Self {
+        let delay_bits = (delay_ticks as u32) << LEVEL_BITS;
+        Self(delay_bits | u32::from(levels))
+    }
 }
 
 impl TryFrom<PinFrame> for PackedPinFrame {
@@ -39,8 +45,7 @@ impl TryFrom<PinFrame> for PackedPinFrame {
             return Err(ExecutorError::DelayOutOfRange);
         }
 
-        let delay_bits = (frame.delay_ticks as u32) << LEVEL_BITS;
-        Ok(Self(delay_bits | u32::from(frame.levels)))
+        Ok(Self::from_valid_parts(frame.delay_ticks, frame.levels))
     }
 }
 

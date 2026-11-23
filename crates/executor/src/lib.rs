@@ -11,3 +11,6 @@ pub use pin_frame_iterator::PinFrameIterator;
 
 mod packed_pin_frame;
 pub use packed_pin_frame::PackedPinFrame;
+
+mod packed_pin_frame_splitter;
+pub use packed_pin_frame_splitter::PackedPinFrameSplitter;

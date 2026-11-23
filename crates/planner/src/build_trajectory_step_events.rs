@@ -37,16 +37,33 @@ pub fn build_trajectory_step_events<'a>(
 ///
 /// El búfer queda intacto ante un error de construcción. Si el error aparece
 /// durante el recorrido del iterador, puede contener las fronteras generadas.
-pub fn preflight_trajectory_step_events<'a>(
-    profiles: TimedCoordinatedJointPathProfiles<'a>,
+pub fn preflight_trajectory_step_events(
+    profiles: TimedCoordinatedJointPathProfiles<'_>,
     converter: JointToStepsConverter,
     timebase: StepTimeBase,
-    boundaries_buffer: &'a mut [u64],
+    boundaries_buffer: &mut [u64],
 ) -> Result<(), PlannerError> {
     for event in build_trajectory_step_events(profiles, converter, timebase, boundaries_buffer)? {
         event?;
     }
     Ok(())
+}
+
+/// Verifica todos los eventos y devuelve un iterador nuevo para la ejecución.
+///
+/// Si la verificación falla durante el recorrido, el búfer puede contener las
+/// fronteras generadas.
+pub fn build_verified_trajectory_step_events<'a>(
+    profiles: TimedCoordinatedJointPathProfiles<'a>,
+    converter: JointToStepsConverter,
+    timebase: StepTimeBase,
+    boundaries_buffer: &'a mut [u64],
+) -> Result<
+    SegmentedTrajectoryStepEventIterator<'a, impl Fn(u64) -> Result<MotorSteps, PlannerError>>,
+    PlannerError,
+> {
+    preflight_trajectory_step_events(profiles, converter, timebase, boundaries_buffer)?;
+    build_trajectory_step_events(profiles, converter, timebase, boundaries_buffer)
 }
 
 fn validate_motor_position_range(

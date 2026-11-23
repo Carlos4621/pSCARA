@@ -8,7 +8,7 @@ pub struct MotorSteps {
     pub second: i64,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct JointToStepsConverter {
     first_steps_per_radian: f64,
     second_steps_per_radian: f64,

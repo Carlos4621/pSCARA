@@ -2,10 +2,11 @@ use kinematics::JointAngles;
 use planner::{
     CoordinatedJointPathProfiles, CoordinatedJointTrajectory, JointAccelerationLimits,
     JointToStepsConverter, JointVelocityLimits, MotorStepMove, MotorSteps, PlannerError,
-    StepDirEvent, StepDirTiming, StepDirection, StepTimeBase, TimedCoordinatedJointPathProfiles,
-    build_interval_verified_step_dir_events, build_schedule_verified_step_dir_events,
-    build_trajectory_step_events, build_verified_trajectory_step_events, into_step_dir_events,
-    preflight_trajectory_step_events,
+    ScheduledDirChange, ScheduledStepDirEvent, StepDirEvent, StepDirScheduleCursor,
+    StepDirScheduleIterator, StepDirTiming, StepDirection, StepTimeBase,
+    TimedCoordinatedJointPathProfiles, build_interval_verified_step_dir_events,
+    build_schedule_verified_step_dir_events, build_trajectory_step_events,
+    build_verified_trajectory_step_events, into_step_dir_events, preflight_trajectory_step_events,
 };
 
 fn steps(first: i64, second: i64) -> MotorSteps {
@@ -810,6 +811,62 @@ fn schedule_verified_builder_emits_a_valid_reversal() -> Result<(), PlannerError
             );
         }
         assert_eq!(events.next(), None);
+    }
+
+    assert_eq!(boundaries, [0, 7, 8, 12]);
+    Ok(())
+}
+
+#[test]
+fn verified_trajectory_streams_steps_and_schedules_its_reversal() -> Result<(), PlannerError> {
+    let points = points([[0.0, 0.0], [25.0 / 16.0, 0.0], [1.0, 0.0]]);
+    let limits = limits();
+    let timed = timed_path(&points, &[0.0; 3], &limits);
+    let converter = JointToStepsConverter::new(2.0, 2.0)?;
+    let timebase = StepTimeBase::new(3)?;
+    let timing = StepDirTiming::new(1, 1, 500_000_000, 500_000_000)?;
+    let first_direction = Some(StepDirection::Positive);
+    let second_direction = None;
+    let mut boundaries = [u64::MAX; 4];
+
+    {
+        let events = build_schedule_verified_step_dir_events(
+            timed,
+            converter,
+            timebase,
+            timing,
+            first_direction,
+            second_direction,
+            &mut boundaries,
+        )?;
+        let cursor =
+            StepDirScheduleCursor::new(timing, timebase, first_direction, second_direction)?;
+        let mut scheduled = StepDirScheduleIterator::new(events, cursor);
+
+        for (step_tick, first_dir_change) in [
+            (3, None),
+            (4, None),
+            (6, None),
+            (
+                10,
+                Some(ScheduledDirChange {
+                    tick: 8,
+                    direction: StepDirection::Negative,
+                }),
+            ),
+        ] {
+            assert_eq!(
+                scheduled.next(),
+                Some(Ok(ScheduledStepDirEvent {
+                    step_tick,
+                    first_dir_change,
+                    second_dir_change: None,
+                    first_step: true,
+                    second_step: false,
+                }))
+            );
+        }
+        assert_eq!(scheduled.next(), None);
     }
 
     assert_eq!(boundaries, [0, 7, 8, 12]);

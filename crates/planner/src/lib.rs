@@ -90,6 +90,9 @@ pub use scheduled_step_dir_event::{
 mod step_dir_schedule_cursor;
 pub use step_dir_schedule_cursor::StepDirScheduleCursor;
 
+mod step_dir_schedule_iterator;
+pub use step_dir_schedule_iterator::StepDirScheduleIterator;
+
 mod coordinated_step_interpolator;
 pub use coordinated_step_interpolator::{CoordinatedStepInterpolator, StepEvent};
 

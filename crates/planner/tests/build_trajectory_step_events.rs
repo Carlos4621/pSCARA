@@ -2,9 +2,9 @@ use kinematics::JointAngles;
 use planner::{
     CoordinatedJointPathProfiles, CoordinatedJointTrajectory, JointAccelerationLimits,
     JointToStepsConverter, JointVelocityLimits, MotorStepMove, MotorSteps, PlannerError,
-    StepDirEvent, StepDirection, StepTimeBase, TimedCoordinatedJointPathProfiles,
-    build_trajectory_step_events, build_verified_trajectory_step_events, into_step_dir_events,
-    preflight_trajectory_step_events,
+    StepDirEvent, StepDirTiming, StepDirection, StepTimeBase, TimedCoordinatedJointPathProfiles,
+    build_interval_verified_step_dir_events, build_trajectory_step_events,
+    build_verified_trajectory_step_events, into_step_dir_events, preflight_trajectory_step_events,
 };
 
 fn steps(first: i64, second: i64) -> MotorSteps {
@@ -656,37 +656,108 @@ fn verified_builder_preserves_the_original_two_motor_event_sequence() -> Result<
 }
 
 #[test]
-fn verified_trajectory_can_stream_step_dir_events() -> Result<(), PlannerError> {
+fn verified_trajectory_builders_stream_the_expected_step_dir_events() -> Result<(), PlannerError> {
     let points = points([[0.0, 0.0], [0.25, -0.25]]);
     let limits = limits();
     let timed = timed_path(&points, &[0.0; 2], &limits);
     let converter = JointToStepsConverter::new(8.0, 4.0)?;
     let timebase = StepTimeBase::new(8)?;
+    let timing = StepDirTiming::new(125_000_000, 125_000_000, 1, 1)?;
     let mut boundaries = [19, 23];
+    let mut interval_boundaries = [19, 23];
 
     {
         let movement_events =
             build_verified_trajectory_step_events(timed, converter, timebase, &mut boundaries)?;
         let mut events = into_step_dir_events(movement_events);
+        let mut interval_verified = build_interval_verified_step_dir_events(
+            timed,
+            converter,
+            timebase,
+            timing,
+            &mut interval_boundaries,
+        )?;
 
         for (tick, first_direction, second_direction) in [
             (3, Some(StepDirection::Positive), None),
             (4, None, Some(StepDirection::Negative)),
             (6, Some(StepDirection::Positive), None),
         ] {
-            assert_eq!(
-                events.next(),
-                Some(Ok(StepDirEvent {
-                    tick,
-                    first_direction,
-                    second_direction,
-                }))
-            );
+            let expected = Some(Ok(StepDirEvent {
+                tick,
+                first_direction,
+                second_direction,
+            }));
+            assert_eq!(events.next(), expected);
+            assert_eq!(interval_verified.next(), expected);
         }
         assert_eq!(events.next(), None);
+        assert_eq!(interval_verified.next(), None);
     }
 
     assert_eq!(boundaries, [0, 8]);
+    assert_eq!(interval_boundaries, [0, 8]);
+    Ok(())
+}
+
+#[test]
+fn interval_verified_builder_rejects_close_steps_before_returning_an_iterator()
+-> Result<(), PlannerError> {
+    let points = points([[0.0, 0.0], [0.25, -0.25]]);
+    let limits = limits();
+    let timed = timed_path(&points, &[0.0; 2], &limits);
+    let converter = JointToStepsConverter::new(8.0, 4.0)?;
+    let timebase = StepTimeBase::new(8)?;
+    let timing = StepDirTiming::new(250_000_000, 250_000_000, 1, 1)?;
+    let mut boundaries = [19, 23];
+
+    let result = build_interval_verified_step_dir_events(
+        timed,
+        converter,
+        timebase,
+        timing,
+        &mut boundaries,
+    );
+
+    assert_eq!(result.err(), Some(PlannerError::StepIntervalTooShort));
+    assert_eq!(boundaries, [0, 8]);
+    Ok(())
+}
+
+#[test]
+fn interval_verified_builder_emits_the_final_step_after_an_off_grid_end() -> Result<(), PlannerError>
+{
+    let points = points([[0.0, 0.0], [9.0 / 16.0, 0.0]]);
+    let limits = limits();
+    let timed = timed_path(&points, &[0.0; 2], &limits);
+    let converter = JointToStepsConverter::new(1.0, 1.0)?;
+    let timebase = StepTimeBase::new(1)?;
+    let timing = StepDirTiming::new(125_000_000, 125_000_000, 1, 1)?;
+    let mut boundaries = [19, 23];
+    let mut profiles = timed;
+    let profile = profiles.next().expect("one profile")?;
+    assert_eq!(profile.end_time()?, 1.5);
+
+    {
+        let mut events = build_interval_verified_step_dir_events(
+            timed,
+            converter,
+            timebase,
+            timing,
+            &mut boundaries,
+        )?;
+        assert_eq!(
+            events.next(),
+            Some(Ok(StepDirEvent {
+                tick: 2,
+                first_direction: Some(StepDirection::Positive),
+                second_direction: None,
+            }))
+        );
+        assert_eq!(events.next(), None);
+    }
+
+    assert_eq!(boundaries, [0, 2]);
     Ok(())
 }
 
@@ -736,7 +807,7 @@ fn preflight_and_verified_builder_reject_hidden_motion() -> Result<(), PlannerEr
 }
 
 #[test]
-fn preflight_and_verified_builder_propagate_an_error_after_a_valid_event()
+fn preflight_and_verified_builders_propagate_an_error_after_a_valid_event()
 -> Result<(), PlannerError> {
     // The next representable f64 angle above 2^53 is two steps away.
     let limit = 1_i64 << 53;
@@ -767,6 +838,18 @@ fn preflight_and_verified_builder_propagate_an_error_after_a_valid_event()
 
     boundaries = [19, 23];
     let result = build_verified_trajectory_step_events(timed, converter, timebase, &mut boundaries);
+    assert_eq!(result.err(), Some(PlannerError::MultipleStepsOnTick));
+    assert_eq!(boundaries, [0, 16]);
+
+    boundaries = [19, 23];
+    let timing = StepDirTiming::new(1, 1, 1, 1)?;
+    let result = build_interval_verified_step_dir_events(
+        timed,
+        converter,
+        timebase,
+        timing,
+        &mut boundaries,
+    );
     assert_eq!(result.err(), Some(PlannerError::MultipleStepsOnTick));
     assert_eq!(boundaries, [0, 16]);
     Ok(())

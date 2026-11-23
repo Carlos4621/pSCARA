@@ -111,6 +111,6 @@ pub use segmented_step_events_builder::build_segmented_step_events;
 
 mod build_trajectory_step_events;
 pub use build_trajectory_step_events::{
-    build_trajectory_step_events, build_verified_trajectory_step_events,
-    preflight_trajectory_step_events,
+    build_interval_verified_step_dir_events, build_trajectory_step_events,
+    build_verified_trajectory_step_events, preflight_trajectory_step_events,
 };

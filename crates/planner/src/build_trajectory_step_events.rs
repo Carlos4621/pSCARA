@@ -1,5 +1,8 @@
 use crate::{
-    CoordinatedJointTrajectory, JointToStepsConverter, MotorSteps, PlannerError, SegmentedTrajectoryStepEventIterator, StepTimeBase, TimedCoordinatedJointPathProfiles, build_segmented_step_events,
+    CoordinatedJointTrajectory, JointToStepsConverter, MotorSteps, PlannerError,
+    SegmentedTrajectoryStepEventIterator, StepDirEvent, StepDirTiming, StepTimeBase,
+    TimedCoordinatedJointPathProfiles, build_segmented_step_events, into_step_dir_events,
+    validate_step_dir_intervals,
 };
 
 pub fn build_trajectory_step_events<'a>(
@@ -7,7 +10,10 @@ pub fn build_trajectory_step_events<'a>(
     converter: JointToStepsConverter,
     timebase: StepTimeBase,
     boundaries_buffer: &'a mut [u64],
-) -> Result<SegmentedTrajectoryStepEventIterator<'a, impl Fn(u64) -> Result<MotorSteps, PlannerError>>, PlannerError> {
+) -> Result<
+    SegmentedTrajectoryStepEventIterator<'a, impl Fn(u64) -> Result<MotorSteps, PlannerError>>,
+    PlannerError,
+> {
     let trajectory = CoordinatedJointTrajectory::new(profiles)?;
 
     validate_motor_position_range(profiles, &converter)?;
@@ -64,6 +70,27 @@ pub fn build_verified_trajectory_step_events<'a>(
 > {
     preflight_trajectory_step_events(profiles, converter, timebase, boundaries_buffer)?;
     build_trajectory_step_events(profiles, converter, timebase, boundaries_buffer)
+}
+
+/// Verifica todos los eventos y la separación entre pulsos STEP de cada motor.
+/// Devuelve un iterador nuevo para la ejecución.
+///
+/// Si la verificación falla, el búfer puede contener las fronteras generadas.
+pub fn build_interval_verified_step_dir_events<'a>(
+    profiles: TimedCoordinatedJointPathProfiles<'a>,
+    converter: JointToStepsConverter,
+    timebase: StepTimeBase,
+    timing: StepDirTiming,
+    boundaries_buffer: &'a mut [u64],
+) -> Result<impl Iterator<Item = Result<StepDirEvent, PlannerError>> + 'a, PlannerError> {
+    {
+        let events =
+            build_trajectory_step_events(profiles, converter, timebase, boundaries_buffer)?;
+        validate_step_dir_intervals(into_step_dir_events(events), timing, timebase)?;
+    }
+
+    let events = build_trajectory_step_events(profiles, converter, timebase, boundaries_buffer)?;
+    Ok(into_step_dir_events(events))
 }
 
 fn validate_motor_position_range(

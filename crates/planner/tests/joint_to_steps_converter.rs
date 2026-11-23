@@ -2,9 +2,9 @@ use core::f64::consts::TAU;
 
 use kinematics::JointAngles;
 use planner::{
-    CoordinatedJointPathProfiles, CoordinatedJointTrajectory, CoordinatedJointTrajectoryCursor,
-    JointAccelerationLimits, JointToStepsConverter, JointVelocityLimits, MotorSteps, PlannerError,
-    TimedCoordinatedJointPathProfiles,
+    CoordinatedJointMotionProfile, CoordinatedJointPathProfiles, CoordinatedJointTrajectory,
+    CoordinatedJointTrajectoryCursor, JointAccelerationLimits, JointToStepsConverter,
+    JointVelocityLimits, MotorSteps, PlannerError, TimedCoordinatedJointPathProfiles,
 };
 
 const I64_UPPER_BOUND: f64 = (1_u64 << 63) as f64;
@@ -192,6 +192,103 @@ fn overflowing_a_product_on_either_axis_does_not_poison_later_conversions() {
         );
         assert_eq!(converter.convert(angles(1.0, -1.0)), Ok(steps(2, -4)));
     }
+}
+
+#[test]
+fn peak_step_frequencies_use_each_motors_resolution_without_rounding_to_integers() {
+    for (velocities, resolutions, expected) in [
+        ((2.0, 1.0), (400.0, 800.0), (800.0, 800.0)),
+        ((0.0, 3.0), (400.0, 200.0), (0.0, 600.0)),
+        ((1.5, 2.0), (100.0, 100.0), (150.0, 200.0)),
+        ((0.0, 0.0), (400.0, 400.0), (0.0, 0.0)),
+        ((1.5, 0.5), (0.25, 3.0), (0.375, 1.5)),
+    ] {
+        let converter = JointToStepsConverter::new(resolutions.0, resolutions.1).unwrap();
+        assert_eq!(converter.peak_step_frequencies(velocities), Ok(expected));
+    }
+}
+
+#[test]
+fn peak_step_frequencies_reject_negative_and_nonfinite_velocities_on_either_axis() {
+    let converter = JointToStepsConverter::new(400.0, 800.0).unwrap();
+    for invalid in [
+        -SMALLEST,
+        -1.0,
+        -f64::MAX,
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+        f64::NAN,
+        -f64::NAN,
+    ] {
+        assert_eq!(
+            converter.peak_step_frequencies((invalid, 0.0)),
+            Err(PlannerError::InvalidJointVelocity)
+        );
+        assert_eq!(
+            converter.peak_step_frequencies((0.0, invalid)),
+            Err(PlannerError::InvalidJointVelocity)
+        );
+    }
+}
+
+#[test]
+fn peak_step_frequencies_return_positive_zero_for_either_signed_zero() {
+    let converter = JointToStepsConverter::new(f64::MAX, SMALLEST).unwrap();
+    for velocities in [(0.0, -0.0), (-0.0, 0.0), (-0.0, -0.0)] {
+        let (first, second) = converter.peak_step_frequencies(velocities).unwrap();
+        assert_eq!(first.to_bits(), 0.0_f64.to_bits());
+        assert_eq!(second.to_bits(), 0.0_f64.to_bits());
+    }
+}
+
+#[test]
+fn peak_step_frequencies_accept_subnormal_and_underflowed_products() {
+    let converter = JointToStepsConverter::new(1.0, SMALLEST).unwrap();
+    assert_eq!(
+        converter.peak_step_frequencies((SMALLEST, 0.25)),
+        Ok((SMALLEST, 0.0))
+    );
+}
+
+#[test]
+fn peak_step_frequencies_accept_the_maximum_finite_product_and_reject_overflow() {
+    let converter = JointToStepsConverter::new(2.0, 4.0).unwrap();
+    let first_limit = f64::MAX / 2.0;
+    let second_limit = f64::MAX / 4.0;
+    assert_eq!(
+        converter.peak_step_frequencies((first_limit, second_limit)),
+        Ok((f64::MAX, f64::MAX))
+    );
+    assert_eq!(
+        converter.peak_step_frequencies((first_limit.next_up(), second_limit)),
+        Err(PlannerError::NumericalFailure)
+    );
+    assert_eq!(
+        converter.peak_step_frequencies((first_limit, second_limit.next_up())),
+        Err(PlannerError::NumericalFailure)
+    );
+}
+
+#[test]
+fn peak_step_frequencies_accept_the_magnitudes_from_a_coordinated_profile()
+-> Result<(), PlannerError> {
+    let velocity = JointVelocityLimits::new(10.0, 10.0)?;
+    let acceleration = JointAccelerationLimits::new(2.0, 1.0)?;
+    let profile = CoordinatedJointMotionProfile::new(
+        angles(0.0, 0.0),
+        angles(2.0, -1.0),
+        &velocity,
+        &acceleration,
+        0.0,
+        0.0,
+    )?;
+    let converter = JointToStepsConverter::new(400.0, 800.0)?;
+
+    assert_eq!(
+        converter.peak_step_frequencies(profile.peak_joint_velocities()?),
+        Ok((800.0, 800.0))
+    );
+    Ok(())
 }
 
 #[test]

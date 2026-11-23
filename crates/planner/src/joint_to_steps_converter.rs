@@ -44,6 +44,25 @@ impl JointToStepsConverter {
         })
     }
 
+    /// Convierte magnitudes de velocidad en rad/s a frecuencias en micropasos/s.
+    pub fn peak_step_frequencies(
+        &self,
+        joint_velocities: (f64, f64),
+    ) -> Result<(f64, f64), PlannerError> {
+        let (first_velocity, second_velocity) = joint_velocities;
+        utilities::validate_finite_positive(first_velocity)
+            .map_err(|_| PlannerError::InvalidJointVelocity)?;
+        utilities::validate_finite_positive(second_velocity)
+            .map_err(|_| PlannerError::InvalidJointVelocity)?;
+
+        let first_frequency = first_velocity.abs() * self.first_steps_per_radian;
+        let second_frequency = second_velocity.abs() * self.second_steps_per_radian;
+        utilities::validate_finite(first_frequency).map_err(|_| PlannerError::NumericalFailure)?;
+        utilities::validate_finite(second_frequency).map_err(|_| PlannerError::NumericalFailure)?;
+
+        Ok((first_frequency, second_frequency))
+    }
+
     fn in_i64_range(value: f64) -> bool {
         value.is_finite() && value >= i64::MIN as f64 && value < i64::MAX as f64
     }

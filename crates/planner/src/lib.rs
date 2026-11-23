@@ -108,6 +108,9 @@ pub use pin_operation_release_cursor::PinOperationReleaseCursor;
 mod pin_operation_batch_iterator;
 pub use pin_operation_batch_iterator::PinOperationBatchIterator;
 
+mod pin_operation_buffer_capacity;
+pub use pin_operation_buffer_capacity::pin_operation_buffer_capacity_bound;
+
 mod coordinated_step_interpolator;
 pub use coordinated_step_interpolator::{CoordinatedStepInterpolator, StepEvent};
 

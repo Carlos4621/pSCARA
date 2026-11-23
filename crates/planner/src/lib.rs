@@ -105,6 +105,9 @@ pub use pending_pin_operation_buffer::PendingPinOperationBuffer;
 mod pin_operation_release_cursor;
 pub use pin_operation_release_cursor::PinOperationReleaseCursor;
 
+mod pin_operation_batch_iterator;
+pub use pin_operation_batch_iterator::PinOperationBatchIterator;
+
 mod coordinated_step_interpolator;
 pub use coordinated_step_interpolator::{CoordinatedStepInterpolator, StepEvent};
 

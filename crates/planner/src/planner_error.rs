@@ -46,6 +46,8 @@ pub enum PlannerError {
     InsufficientBoundaryBuffer,
     /// Un motor recorre más de un micropaso al pasar por una frontera entre ticks.
     SubtickMotionNotRepresentable,
+    /// Al menos un requisito temporal de STEP/DIR es cero.
+    InvalidStepDirTiming,
 }
 
 impl PlannerError {

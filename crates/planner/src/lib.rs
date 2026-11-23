@@ -70,6 +70,9 @@ pub use step_dir_event::{StepDirEvent, into_step_dir_events};
 mod step_dir_pin_command;
 pub use step_dir_pin_command::{StepDirPinCommand, StepDirState};
 
+mod step_dir_timing;
+pub use step_dir_timing::StepDirTiming;
+
 mod coordinated_step_interpolator;
 pub use coordinated_step_interpolator::{CoordinatedStepInterpolator, StepEvent};
 

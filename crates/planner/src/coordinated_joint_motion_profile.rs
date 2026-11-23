@@ -98,6 +98,18 @@ impl CoordinatedJointMotionProfile {
         Ok((first_velocity, second_velocity))
     }
 
+    /// Devuelve las magnitudes máximas de velocidad del perfil en rad/s.
+    pub fn peak_joint_velocities(&self) -> Result<(f64, f64), PlannerError> {
+        let peak_progress_speed = self.progress_profile.peak_velocity();
+        let first_velocity = self.first_displacement.abs() * peak_progress_speed;
+        let second_velocity = self.second_displacement.abs() * peak_progress_speed;
+
+        utilities::validate_finite(first_velocity).map_err(|_| PlannerError::NumericalFailure)?;
+        utilities::validate_finite(second_velocity).map_err(|_| PlannerError::NumericalFailure)?;
+
+        Ok((first_velocity, second_velocity))
+    }
+
     pub fn acceleration_at(&self, time: f64) -> Result<(f64, f64), PlannerError> {
         utilities::validate_finite_positive(time).map_err(|_| PlannerError::InvalidTime)?;
 

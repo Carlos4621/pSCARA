@@ -175,6 +175,10 @@ impl MotionProfile {
         self.total_time
     }
 
+    pub(crate) fn peak_velocity(&self) -> f64 {
+        self.peak_velocity
+    }
+
     pub fn position_at(&self, time: f64) -> Result<f64, PlannerError> {
         self.position_at_scaled(time, self.total_time)
     }

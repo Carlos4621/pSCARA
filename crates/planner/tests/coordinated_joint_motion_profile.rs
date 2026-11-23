@@ -84,6 +84,75 @@ fn triangular_velocities_follow_each_joint_displacement_sign() {
 }
 
 #[test]
+fn triangular_joint_peaks_follow_the_displacement_ratio_in_either_direction() {
+    for end in [[2.0, -1.0], [-2.0, 1.0], [-2.0, -1.0]] {
+        let motion = build([0.0, 0.0], end, [10.0, 10.0], [2.0, 1.0], 0.0, 0.0).unwrap();
+        assert_eq!(motion.peak_joint_velocities(), Ok((2.0, 1.0)));
+    }
+}
+
+#[test]
+fn trapezoidal_joint_peaks_match_cruise_whichever_axis_sets_the_speed_limit() {
+    for limits in [[1.0, 10.0], [10.0, 0.5]] {
+        let motion = build([0.0, 0.0], [2.0, -1.0], limits, [2.0, 1.0], 0.0, 0.0).unwrap();
+        assert_eq!(
+            motion.velocity_at(motion.total_time() / 2.0),
+            Ok((1.0, -0.5))
+        );
+        assert_eq!(motion.peak_joint_velocities(), Ok((1.0, 0.5)));
+    }
+}
+
+#[test]
+fn asymmetric_boundary_speeds_can_put_the_peak_away_from_the_midpoint() {
+    // Progress vi=0.1, vf=0.3 and a=0.2 give peak=0.5 after 2 seconds.
+    let motion = build([2.0, 6.0], [4.0, 2.0], [2.0, 4.0], [0.4, 0.8], 0.1, 0.3).unwrap();
+    let (first, second) = motion.peak_joint_velocities().unwrap();
+    close(first, 1.0);
+    close(second, 2.0);
+
+    let (mid_first, mid_second) = motion.velocity_at(motion.total_time() / 2.0).unwrap();
+    assert!(first > mid_first.abs() && second > mid_second.abs());
+}
+
+#[test]
+fn a_stationary_joint_has_positive_zero_peak_velocity() {
+    for (start, end, expected) in [
+        ([0.0, 2.0], [-0.0, 0.0], (0.0_f64, 2.0_f64)),
+        ([2.0, 0.0], [0.0, -0.0], (2.0_f64, 0.0_f64)),
+    ] {
+        let motion = build(start, end, [10.0, 10.0], [2.0, 2.0], 0.0, 0.0).unwrap();
+        let (first, second) = motion.peak_joint_velocities().unwrap();
+        assert_eq!(first.to_bits(), expected.0.to_bits());
+        assert_eq!(second.to_bits(), expected.1.to_bits());
+    }
+}
+
+#[test]
+fn joint_peaks_accept_both_subnormal_and_maximum_finite_velocities() {
+    let tiny = f64::from_bits(1);
+    let slow_joint = build([0.0, 0.0], [1.0, -tiny], [2.0, tiny], [1.0, tiny], 0.0, 0.0).unwrap();
+    assert_eq!(slow_joint.peak_joint_velocities(), Ok((1.0, tiny)));
+
+    let cap = f64::MAX / 2.0;
+    let fast_joint = build([0.0, 0.0], [2.0, -1.0], [f64::MAX; 2], [2.0, 1.0], cap, cap).unwrap();
+    assert_eq!(fast_joint.peak_joint_velocities(), Ok((f64::MAX, cap)));
+}
+
+#[test]
+fn joint_peaks_reject_a_nonfinite_product_on_either_axis() {
+    // Rounding MAX / 1.5 up makes its product with 1.5 overflow.
+    let cap = f64::MAX / 1.5;
+    for end in [[1.5, 0.0], [0.0, -1.5]] {
+        let motion = build([0.0, 0.0], end, [f64::MAX; 2], [1.5, 1.5], cap, cap).unwrap();
+        assert_eq!(
+            motion.peak_joint_velocities(),
+            Err(PlannerError::NumericalFailure)
+        );
+    }
+}
+
+#[test]
 fn triangular_acceleration_changes_sign_after_the_peak() {
     let motion = triangle();
     for (time, progress_acceleration) in [

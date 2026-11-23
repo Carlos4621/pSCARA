@@ -56,15 +56,89 @@ fn validate_subtick_excursion(
     at_boundary: MotorSteps,
     after: MotorSteps,
 ) -> Result<(), PlannerError> {
-    let first_travel = u128::from(before.first.abs_diff(at_boundary.first))
-        + u128::from(at_boundary.first.abs_diff(after.first));
-    let second_travel = u128::from(before.second.abs_diff(at_boundary.second))
-        + u128::from(at_boundary.second.abs_diff(after.second));
+    let mut travel = SubtickTravel::new(before);
+    travel.add_position(at_boundary);
+    travel.add_position(after);
+    travel.validate()
+}
 
-    if first_travel > 1 || second_travel > 1 {
-        return Err(PlannerError::SubtickMotionNotRepresentable);
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "Pendiente de integrar con el constructor público")
+)]
+fn validate_subtick_boundaries(
+    profiles: TimedCoordinatedJointPathProfiles<'_>,
+    trajectory: &CoordinatedJointTrajectory<'_>,
+    converter: &JointToStepsConverter,
+    timebase: StepTimeBase,
+) -> Result<(), PlannerError> {
+    let position_at = |seconds| converter.convert(trajectory.position_at(seconds)?);
+    let position_at_tick = |tick| position_at(timebase.ticks_to_seconds(tick));
+    let finish_interval = |upper, mut travel: SubtickTravel| {
+        travel.add_position(position_at_tick(upper)?);
+        travel.validate()
+    };
+
+    let mut active_interval = None;
+    let mut profiles = profiles.peekable();
+    while let Some(profile) = profiles.next() {
+        let profile = profile?;
+        if profiles.peek().is_none() {
+            break;
+        }
+
+        let boundary_time = profile.end_time()?;
+        let (lower, upper) = timebase.bracketing_ticks(boundary_time)?;
+        if lower == upper {
+            continue;
+        }
+
+        let mut travel = match active_interval {
+            Some((interval, travel)) if interval == (lower, upper) => travel,
+            previous_interval => {
+                if let Some(((_, previous_upper), travel)) = previous_interval {
+                    finish_interval(previous_upper, travel)?;
+                }
+                SubtickTravel::new(position_at_tick(lower)?)
+            }
+        };
+        travel.add_position(position_at(boundary_time)?);
+        active_interval = Some(((lower, upper), travel));
+    }
+
+    if let Some(((_, upper), travel)) = active_interval {
+        finish_interval(upper, travel)?;
     }
     Ok(())
+}
+
+struct SubtickTravel {
+    previous: MotorSteps,
+    first_travel: u128,
+    second_travel: u128,
+}
+
+impl SubtickTravel {
+    fn new(position: MotorSteps) -> Self {
+        Self {
+            previous: position,
+            first_travel: 0,
+            second_travel: 0,
+        }
+    }
+
+    fn add_position(&mut self, position: MotorSteps) {
+        self.first_travel += u128::from(self.previous.first.abs_diff(position.first));
+        self.second_travel += u128::from(self.previous.second.abs_diff(position.second));
+        self.previous = position;
+    }
+
+    fn validate(&self) -> Result<(), PlannerError> {
+        if self.first_travel > 1 || self.second_travel > 1 {
+            return Err(PlannerError::SubtickMotionNotRepresentable);
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]

@@ -5,3 +5,6 @@ edition = "2024"
 
 [dependencies]
 planner = { path = "../planner" }
+
+[dev-dependencies]
+kinematics = { path = "../kinematics" }

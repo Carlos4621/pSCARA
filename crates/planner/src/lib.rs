@@ -79,6 +79,9 @@ pub use step_dir_interval_validator::validate_step_dir_intervals;
 mod step_dir_change_validator;
 pub use step_dir_change_validator::validate_step_dir_changes;
 
+mod step_dir_schedule_validator;
+pub use step_dir_schedule_validator::validate_step_dir_schedule;
+
 mod coordinated_step_interpolator;
 pub use coordinated_step_interpolator::{CoordinatedStepInterpolator, StepEvent};
 

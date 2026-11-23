@@ -1,5 +1,11 @@
-use super::validate_subtick_excursion;
-use crate::{MotorSteps, PlannerError};
+use kinematics::JointAngles;
+
+use super::{validate_subtick_boundary, validate_subtick_excursion};
+use crate::{
+    CoordinatedJointPathProfiles, CoordinatedJointTrajectory, JointAccelerationLimits,
+    JointToStepsConverter, JointVelocityLimits, MotorSteps, PlannerError, StepTimeBase,
+    TimedCoordinatedJointPathProfiles,
+};
 
 fn steps(first: i64, second: i64) -> MotorSteps {
     MotorSteps { first, second }
@@ -73,4 +79,52 @@ fn rejects_travel_that_would_overflow_a_u64_sum() {
             invalid
         );
     }
+}
+
+#[test]
+fn rejects_a_forward_and_backward_step_inside_one_tick() -> Result<(), PlannerError> {
+    let points = [0.0, 1.0 / 16.0, 0.0].map(|angle| JointAngles::new(angle, 0.0).unwrap());
+    let velocity = JointVelocityLimits::new(10.0, 10.0)?;
+    let acceleration = JointAccelerationLimits::new(1.0, 1.0)?;
+    let profiles = CoordinatedJointPathProfiles::new(&points, &[0.0; 3], &velocity, &acceleration)?;
+    let mut timed = TimedCoordinatedJointPathProfiles::new(profiles)?;
+    let trajectory = CoordinatedJointTrajectory::new(timed)?;
+    let boundary_time = timed.next().expect("outbound profile")?.end_time()?;
+    let converter = JointToStepsConverter::new(16.0, 16.0)?;
+    let timebase = StepTimeBase::new(1)?;
+    let position_at = |seconds| converter.convert(trajectory.position_at(seconds)?);
+
+    assert_eq!(boundary_time, 0.5);
+    assert_eq!(position_at(0.0)?, steps(0, 0));
+    assert_eq!(position_at(boundary_time)?, steps(1, 0));
+    assert_eq!(position_at(1.0)?, steps(0, 0));
+    assert_eq!(
+        validate_subtick_boundary(boundary_time, &trajectory, &converter, timebase),
+        Err(PlannerError::SubtickMotionNotRepresentable)
+    );
+    Ok(())
+}
+
+#[test]
+fn accepts_a_reversal_with_only_one_quantized_step_inside_the_tick() -> Result<(), PlannerError> {
+    let points = [0.0, 9.0 / 64.0, 1.0 / 8.0].map(|angle| JointAngles::new(angle, 0.0).unwrap());
+    let velocity = JointVelocityLimits::new(10.0, 10.0)?;
+    let acceleration = JointAccelerationLimits::new(1.0, 1.0)?;
+    let profiles = CoordinatedJointPathProfiles::new(&points, &[0.0; 3], &velocity, &acceleration)?;
+    let mut timed = TimedCoordinatedJointPathProfiles::new(profiles)?;
+    let trajectory = CoordinatedJointTrajectory::new(timed)?;
+    let boundary_time = timed.next().expect("outbound profile")?.end_time()?;
+    let converter = JointToStepsConverter::new(8.0, 8.0)?;
+    let timebase = StepTimeBase::new(1)?;
+    let position_at = |seconds| converter.convert(trajectory.position_at(seconds)?);
+
+    assert_eq!(boundary_time, 0.75);
+    assert_eq!(position_at(0.0)?, steps(0, 0));
+    assert_eq!(position_at(boundary_time)?, steps(1, 0));
+    assert_eq!(position_at(1.0)?, steps(1, 0));
+    assert_eq!(
+        validate_subtick_boundary(boundary_time, &trajectory, &converter, timebase),
+        Ok(())
+    );
+    Ok(())
 }

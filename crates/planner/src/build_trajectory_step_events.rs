@@ -31,8 +31,26 @@ pub fn build_trajectory_step_events<'a>(
 
 #[cfg_attr(
     not(test),
-    expect(dead_code, reason = "Se usará al validar fronteras entre ticks")
+    expect(dead_code, reason = "Se usará al validar la trayectoria completa")
 )]
+fn validate_subtick_boundary(
+    boundary_time: f64,
+    trajectory: &CoordinatedJointTrajectory<'_>,
+    converter: &JointToStepsConverter,
+    timebase: StepTimeBase,
+) -> Result<(), PlannerError> {
+    let (lower, upper) = timebase.bracketing_ticks(boundary_time)?;
+    if lower == upper {
+        return Ok(());
+    }
+
+    let position_at = |seconds| converter.convert(trajectory.position_at(seconds)?);
+    let before = position_at(timebase.ticks_to_seconds(lower))?;
+    let at_boundary = position_at(boundary_time)?;
+    let after = position_at(timebase.ticks_to_seconds(upper))?;
+    validate_subtick_excursion(before, at_boundary, after)
+}
+
 fn validate_subtick_excursion(
     before: MotorSteps,
     at_boundary: MotorSteps,

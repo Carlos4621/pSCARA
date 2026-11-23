@@ -263,27 +263,35 @@ fn rejects_a_forward_and_backward_step_inside_one_tick() -> Result<(), PlannerEr
 
 #[test]
 fn accepts_a_reversal_with_only_one_quantized_step_inside_the_tick() -> Result<(), PlannerError> {
-    let points = [0.0, 9.0 / 64.0, 1.0 / 8.0].map(|angle| JointAngles::new(angle, 0.0).unwrap());
     let limits = limits()?;
-    let (timed, trajectory) = timed_trajectory(&points, &[0.0; 3], &limits)?;
-    let mut profiles = timed;
-    let boundary_time = profiles.next().expect("outbound profile")?.end_time()?;
     let converter = JointToStepsConverter::new(8.0, 8.0)?;
     let timebase = StepTimeBase::new(1)?;
-    let position_at = |seconds| converter.convert(trajectory.position_at(seconds)?);
 
-    assert_eq!(boundary_time, 0.75);
-    assert_eq!(position_at(0.0)?, steps(0, 0));
-    assert_eq!(position_at(boundary_time)?, steps(1, 0));
-    assert_eq!(position_at(1.0)?, steps(1, 0));
-    assert_eq!(
-        validate_subtick_boundary(boundary_time, &trajectory, &converter, timebase),
-        Ok(())
-    );
-    assert_eq!(
-        validate_subtick_boundaries(timed, &trajectory, &converter, timebase),
-        Ok(())
-    );
+    for (last_point, end_time) in [(1.0 / 8.0, 1.0), (35.0 / 256.0, 0.875)] {
+        let points =
+            [0.0, 9.0 / 64.0, last_point].map(|angle| JointAngles::new(angle, 0.0).unwrap());
+        let (timed, trajectory) = timed_trajectory(&points, &[0.0; 3], &limits)?;
+        let mut profiles = timed;
+        let boundary_time = profiles.next().expect("outbound profile")?.end_time()?;
+        let position_at = |seconds| converter.convert(trajectory.position_at(seconds)?);
+
+        assert_eq!(boundary_time, 0.75);
+        assert_eq!(
+            profiles.next().expect("last profile")?.end_time()?,
+            end_time
+        );
+        assert_eq!(position_at(0.0)?, steps(0, 0));
+        assert_eq!(position_at(boundary_time)?, steps(1, 0));
+        assert_eq!(position_at(end_time)?, steps(1, 0));
+        assert_eq!(
+            validate_subtick_boundary(boundary_time, &trajectory, &converter, timebase),
+            Ok(())
+        );
+        assert_eq!(
+            validate_subtick_boundaries(timed, &trajectory, &converter, timebase),
+            Ok(())
+        );
+    }
     Ok(())
 }
 

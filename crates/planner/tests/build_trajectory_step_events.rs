@@ -318,7 +318,7 @@ fn an_insufficient_boundary_buffer_is_untouched_and_can_be_retried() {
 }
 
 #[test]
-fn an_off_grid_end_with_a_sufficient_clock_fails_during_sampling() -> Result<(), PlannerError> {
+fn emits_the_final_step_after_an_off_grid_end() -> Result<(), PlannerError> {
     let points = points([[0.0, 0.0], [9.0 / 16.0, 0.0]]);
     let limits = limits();
     let timed = timed_path(&points, &[0.0; 2], &limits);
@@ -336,30 +336,56 @@ fn an_off_grid_end_with_a_sufficient_clock_fails_during_sampling() -> Result<(),
     assert_eq!(timebase.bracketing_ticks(end_time)?, (1, 2));
 
     let mut boundaries = [19, 23];
-    let result = build_trajectory_step_events(timed, converter, timebase, &mut boundaries)?
-        .collect::<Result<Vec<_>, _>>();
-    assert_eq!(result, Err(PlannerError::InvalidTime));
+    let events = build_trajectory_step_events(timed, converter, timebase, &mut boundaries)?
+        .collect::<Result<Vec<_>, _>>()?;
     assert_eq!(boundaries, [0, 2]);
+    assert_eq!(events, [(2, MotorStepMove::new(steps(0, 0), steps(1, 0)))]);
     Ok(())
 }
 
 #[test]
-fn off_grid_ends_after_an_aligned_internal_boundary_fail_during_sampling()
+fn an_internal_boundary_and_the_end_can_share_the_final_tick_interval() -> Result<(), PlannerError>
+{
+    let points = points([[1.0 / 8.0, 0.0], [33.0 / 64.0, 0.0], [34.0 / 64.0, 0.0]]);
+    let limits = limits();
+    let timed = timed_path(&points, &[0.0; 3], &limits);
+    let timebase = StepTimeBase::new(1)?;
+    let converter = JointToStepsConverter::new(1.0, 1.0)?;
+
+    let end_times = timed
+        .map(|profile| profile?.end_time())
+        .collect::<Result<Vec<_>, _>>()?;
+    assert_eq!(end_times, [1.25, 1.5]);
+
+    let mut boundaries = [19, 23, 29];
+    let events = build_trajectory_step_events(timed, converter, timebase, &mut boundaries)?
+        .collect::<Result<Vec<_>, _>>()?;
+    assert_eq!(boundaries, [0, 1, 2]);
+    assert_eq!(events, [(2, MotorStepMove::new(steps(0, 0), steps(1, 0)))]);
+    Ok(())
+}
+
+#[test]
+fn preserves_earlier_steps_when_the_end_after_an_aligned_boundary_is_off_grid()
 -> Result<(), PlannerError> {
     let limits = limits();
     let timebase = StepTimeBase::new(1)?;
-    for (last_point, last_tick) in [(0.25 + 1.0 / 256.0, 2), (0.25 + 9.0 / 16.0, 3)] {
+    let one_step = [(2, MotorStepMove::new(steps(0, 0), steps(1, 0)))];
+    for (last_point, last_tick, expected) in [
+        (0.25 + 1.0 / 256.0, 2, &[][..]),
+        (0.25 + 9.0 / 16.0, 3, &one_step[..]),
+    ] {
         let points = points([[0.0, 0.0], [0.25, 0.0], [last_point, 0.0]]);
         let timed = timed_path(&points, &[0.0; 3], &limits);
         let mut boundaries = [19, 23, 29];
-        let result = build_trajectory_step_events(
+        let events = build_trajectory_step_events(
             timed,
             JointToStepsConverter::new(1.0, 1.0)?,
             timebase,
             &mut boundaries,
         )?
-        .collect::<Result<Vec<_>, _>>();
-        assert_eq!(result, Err(PlannerError::InvalidTime));
+        .collect::<Result<Vec<_>, _>>()?;
+        assert_eq!(events.as_slice(), expected);
         assert_eq!(boundaries, [0, 1, last_tick]);
     }
     Ok(())

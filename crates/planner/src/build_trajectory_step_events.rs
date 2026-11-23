@@ -16,7 +16,7 @@ pub fn build_trajectory_step_events<'a>(
     let position_at_tick = move |tick: u64| -> Result<MotorSteps, PlannerError> {
         let time = timebase.ticks_to_seconds(tick);
 
-        let angles = trajectory.position_at(time)?;
+        let angles = trajectory.position_at_clamped(time)?;
 
         converter.convert(angles)
     };
@@ -67,7 +67,7 @@ fn validate_subtick_boundary(
         return Ok(());
     }
 
-    let position_at = |seconds| converter.convert(trajectory.position_at(seconds)?);
+    let position_at = |seconds| converter.convert(trajectory.position_at_clamped(seconds)?);
     let before = position_at(timebase.ticks_to_seconds(lower))?;
     let at_boundary = position_at(boundary_time)?;
     let after = position_at(timebase.ticks_to_seconds(upper))?;
@@ -91,7 +91,7 @@ fn validate_subtick_boundaries(
     converter: &JointToStepsConverter,
     timebase: StepTimeBase,
 ) -> Result<(), PlannerError> {
-    let position_at = |seconds| converter.convert(trajectory.position_at(seconds)?);
+    let position_at = |seconds| converter.convert(trajectory.position_at_clamped(seconds)?);
     let position_at_tick = |tick| position_at(timebase.ticks_to_seconds(tick));
     let finish_interval = |upper, mut travel: SubtickTravel| {
         travel.add_position(position_at_tick(upper)?);

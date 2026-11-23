@@ -1,4 +1,6 @@
-use crate::PlannerError;
+use crate::{PlannerError, StepTimeBase};
+
+const NANOS_PER_SECOND: u128 = 1_000_000_000;
 
 /// Tiempos mínimos de las señales STEP/DIR en nanosegundos.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -47,5 +49,21 @@ impl StepDirTiming {
     /// Tiempo mínimo que DIR debe conservar su valor después del flanco activo de STEP.
     pub fn dir_hold_ns(&self) -> u64 {
         self.dir_hold_ns
+    }
+
+    /// Intervalo mínimo entre flancos activos de STEP del mismo motor, en ticks redondeados hacia arriba.
+    /// Devuelve [`PlannerError::NumericalFailure`] si el intervalo no cabe en `u64`.
+    pub fn min_step_interval_ticks(&self, timebase: StepTimeBase) -> Result<u64, PlannerError> {
+        let total_ns = u128::from(self.step_high_ns) + u128::from(self.step_low_ns);
+        let ticks_per_second = u128::from(timebase.ticks_per_second());
+
+        // Los segundos completos caben en 36 bits y el resto en 30.
+        // Ambos productos y su suma caben en u128 incluso a la frecuencia máxima.
+        let whole_seconds = total_ns / NANOS_PER_SECOND;
+        let remaining_ns = total_ns % NANOS_PER_SECOND;
+        let whole_ticks = whole_seconds * ticks_per_second;
+        let remaining_ticks = (remaining_ns * ticks_per_second).div_ceil(NANOS_PER_SECOND);
+
+        u64::try_from(whole_ticks + remaining_ticks).map_err(|_| PlannerError::NumericalFailure)
     }
 }

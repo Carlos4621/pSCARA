@@ -513,6 +513,85 @@ fn the_accelerated_single_axis_example_emits_at_4_7_10_and_12() {
 }
 
 #[test]
+fn a_round_trip_uses_one_iterator_per_direction_and_returns_to_zero() {
+    let points = [[0.0, 0.0], [1.0, 0.0], [0.0, 0.0]].map(|[a, b]| JointAngles::new(a, b).unwrap());
+    let velocity = JointVelocityLimits::new(10.0, 10.0).unwrap();
+    let acceleration = JointAccelerationLimits::new(1.0, 1.0).unwrap();
+    let profiles =
+        CoordinatedJointPathProfiles::new(&points, &[0.0; 3], &velocity, &acceleration).unwrap();
+    let timed = TimedCoordinatedJointPathProfiles::new(profiles).unwrap();
+    let end_times: Vec<_> = timed
+        .map(|profile| profile.unwrap().end_time().unwrap())
+        .collect();
+    assert_eq!(end_times, [2.0, 4.0]);
+
+    let trajectory = CoordinatedJointTrajectory::new(timed).unwrap();
+    let converter = JointToStepsConverter::new(4.0, 4.0).unwrap();
+    let timebase = StepTimeBase::new(8).unwrap();
+    assert_eq!(timebase.seconds_to_ticks(4.0), Ok(32));
+    let position_at_tick =
+        |tick| converter.convert(trajectory.position_at(timebase.ticks_to_seconds(tick))?);
+    assert_eq!(position_at_tick(0), Ok(steps(0, 0)));
+    assert_eq!(position_at_tick(16), Ok(steps(4, 0)));
+    assert_eq!(position_at_tick(32), Ok(steps(0, 0)));
+
+    // round(3.5) = 4 and round(0.5) = 1: on the way back the
+    // transitions occur after these ties, at ticks 21 and 29.
+    assert_eq!(position_at_tick(20), Ok(steps(4, 0)));
+    assert_eq!(position_at_tick(28), Ok(steps(1, 0)));
+
+    let mut reached = steps(0, 0);
+    let mut all_events = Vec::new();
+    for (start, end, direction, expected_ticks, target) in [
+        (0, 16, StepDirection::Positive, [4, 7, 10, 12], steps(4, 0)),
+        (
+            16,
+            32,
+            StepDirection::Negative,
+            [21, 23, 26, 29],
+            steps(0, 0),
+        ),
+    ] {
+        assert_eq!(position_at_tick(start), Ok(reached));
+        let mut iterator = TrajectoryStepEventIterator::new(start, end, reached, |tick| {
+            assert!((start + 1..=end).contains(&tick));
+            position_at_tick(tick)
+        })
+        .unwrap();
+        let events = iterator.by_ref().collect::<Result<Vec<_>, _>>().unwrap();
+        assert_exhausted(&mut iterator);
+        assert_eq!(
+            events.iter().map(|event| event.0).collect::<Vec<_>>(),
+            expected_ticks
+        );
+
+        let mut linear_events = Vec::new();
+        let mut previous = reached;
+        for tick in start + 1..=end {
+            let position = position_at_tick(tick).unwrap();
+            if position != previous {
+                linear_events.push((tick, MotorStepMove::new(previous, position)));
+            }
+            previous = position;
+        }
+        assert_eq!(events, linear_events);
+
+        for &(tick, movement) in &events {
+            assert_eq!(movement.first().pulses, 1);
+            assert_eq!(movement.first().direction, direction);
+            assert_eq!(movement.second().pulses, 0);
+            replay(&mut reached, movement);
+            assert_eq!(position_at_tick(tick), Ok(reached));
+        }
+        assert_eq!(reached, target);
+        all_events.extend(events);
+    }
+    assert_eq!(all_events.len(), 8);
+    assert!(all_events.windows(2).all(|pair| pair[0].0 < pair[1].0));
+    assert_eq!(reached, steps(0, 0));
+}
+
+#[test]
 fn the_forward_only_motor_sampler_is_incompatible_with_binary_search() {
     let points = [[0.0, 0.0], [1.0, 0.0]].map(|[a, b]| JointAngles::new(a, b).unwrap());
     let velocity = JointVelocityLimits::new(10.0, 10.0).unwrap();

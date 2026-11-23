@@ -8,6 +8,7 @@ use planner::{
     CoordinatedJointPathProfiles, CoordinatedJointTrajectory, JointAccelerationLimits,
     JointToStepsConverter, JointVelocityLimits, MotorStepMove, MotorSteps, PlannerError,
     SegmentedTrajectoryStepEventIterator, StepTimeBase, TimedCoordinatedJointPathProfiles,
+    generate_segment_boundaries,
 };
 
 fn steps(first: i64, second: i64) -> MotorSteps {
@@ -213,12 +214,8 @@ fn a_real_round_trip_emits_the_same_events_as_tick_by_tick_sampling() -> Result<
     let timebase = StepTimeBase::new(8)?;
 
     let mut boundaries = [0_u64; 3];
-    for (i, profile) in timed.enumerate() {
-        let end_time = profile?.end_time()?;
-        let end_tick = timebase.seconds_to_ticks(end_time)?;
-        assert_eq!(timebase.ticks_to_seconds(end_tick), end_time);
-        boundaries[i + 1] = end_tick;
-    }
+    let count = generate_segment_boundaries(timed, timebase, &mut boundaries)?;
+    assert_eq!(count, boundaries.len());
     assert_eq!(boundaries, [0, 16, 32]);
 
     let trajectory = CoordinatedJointTrajectory::new(timed)?;
@@ -241,7 +238,8 @@ fn a_real_round_trip_emits_the_same_events_as_tick_by_tick_sampling() -> Result<
         [4, 7, 10, 12, 21, 23, 26, 29]
     );
 
-    let mut iterator = SegmentedTrajectoryStepEventIterator::new(&boundaries, initial, sample)?;
+    let mut iterator =
+        SegmentedTrajectoryStepEventIterator::new(&boundaries[..count], initial, sample)?;
     for event in expected {
         assert_eq!(iterator.next(), Some(Ok(event)));
     }

@@ -90,3 +90,6 @@ pub use trajectory_step_event_iterator::TrajectoryStepEventIterator;
 
 mod segmented_trajectory_step_event_iterator;
 pub use segmented_trajectory_step_event_iterator::SegmentedTrajectoryStepEventIterator;
+
+mod segment_boundaries;
+pub use segment_boundaries::generate_segment_boundaries;

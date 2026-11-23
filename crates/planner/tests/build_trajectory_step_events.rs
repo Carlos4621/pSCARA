@@ -194,6 +194,29 @@ fn builds_step_events_for_a_reversal_between_ticks() -> Result<(), PlannerError>
 }
 
 #[test]
+fn a_round_trip_inside_one_tick_currently_emits_no_events() -> Result<(), PlannerError> {
+    let points = points([[0.0, 0.0], [1.0 / 16.0, 0.0], [0.0, 0.0]]);
+    let limits = limits();
+    let timed = timed_path(&points, &[0.0; 3], &limits);
+    let timebase = StepTimeBase::new(1)?;
+    let trajectory = CoordinatedJointTrajectory::new(timed)?;
+    let converter = JointToStepsConverter::new(16.0, 16.0)?;
+    let position_at = |seconds| converter.convert(trajectory.position_at(seconds)?);
+
+    assert_eq!(position_at(0.0)?, steps(0, 0));
+    assert_eq!(position_at(0.5)?, steps(1, 0));
+    assert_eq!(position_at(1.0)?, steps(0, 0));
+
+    let mut boundaries = [u64::MAX; 2];
+    let events = build_trajectory_step_events(timed, converter, timebase, &mut boundaries)?
+        .collect::<Result<Vec<_>, _>>()?;
+    assert_eq!(boundaries, [0, 1]);
+    // At 1 Hz the samples at both ends of the tick miss the excursion.
+    assert!(events.is_empty(), "unexpected events: {events:?}");
+    Ok(())
+}
+
+#[test]
 fn a_trajectory_that_quantizes_to_no_steps_exhausts_at_the_clock_limits() {
     let points = points([[0.0, 0.0], [0.25, -0.25]]);
     let limits = limits();

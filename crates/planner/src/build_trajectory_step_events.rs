@@ -10,6 +10,8 @@ pub fn build_trajectory_step_events<'a>(
 ) -> Result<SegmentedTrajectoryStepEventIterator<'a, impl Fn(u64) -> Result<MotorSteps, PlannerError>>, PlannerError> {
     let trajectory = CoordinatedJointTrajectory::new(profiles)?;
 
+    validate_subtick_boundaries(profiles, &trajectory, &converter, timebase)?;
+
     let position_at_tick = move |tick: u64| -> Result<MotorSteps, PlannerError> {
         let time = timebase.ticks_to_seconds(tick);
 
@@ -31,7 +33,7 @@ pub fn build_trajectory_step_events<'a>(
 
 #[cfg_attr(
     not(test),
-    expect(dead_code, reason = "Se usará al validar la trayectoria completa")
+    expect(dead_code, reason = "Las pruebas comparan ambos validadores")
 )]
 fn validate_subtick_boundary(
     boundary_time: f64,
@@ -62,10 +64,6 @@ fn validate_subtick_excursion(
     travel.validate()
 }
 
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "Pendiente de integrar con el constructor público")
-)]
 fn validate_subtick_boundaries(
     profiles: TimedCoordinatedJointPathProfiles<'_>,
     trajectory: &CoordinatedJointTrajectory<'_>,

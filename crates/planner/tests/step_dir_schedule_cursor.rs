@@ -150,10 +150,11 @@ fn accepts_matching_initial_directions_on_both_motors_at_tick_zero() {
 }
 
 #[test]
-fn rejects_an_unrepresentable_step_interval_when_constructing_the_cursor() {
+fn rejects_an_unrepresentable_discrete_step_interval_when_constructing_the_cursor() {
     let timing = StepDirTiming::new(u64::MAX, u64::MAX, 1, 1).unwrap();
-    let timebase = StepTimeBase::new(u64::MAX).unwrap();
+    let timebase = StepTimeBase::new(500_000_000).unwrap();
 
+    assert_eq!(timing.min_step_interval_ticks(timebase), Ok(u64::MAX));
     assert_eq!(
         StepDirScheduleCursor::new(timing, timebase, None, None).unwrap_err(),
         PlannerError::NumericalFailure

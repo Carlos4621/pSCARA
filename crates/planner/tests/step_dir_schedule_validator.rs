@@ -1,5 +1,5 @@
 use planner::{
-    PlannerError, StepDirEvent, StepDirTiming, StepDirection,
+    PlannerError, StepDirEvent, StepDirScheduleCursor, StepDirTiming, StepDirection,
     StepDirection::{Negative, Positive},
     StepTimeBase, validate_step_dir_changes, validate_step_dir_intervals,
     validate_step_dir_schedule,
@@ -31,6 +31,38 @@ fn validate_schedule(
         initial_first_direction,
         initial_second_direction,
     )
+}
+
+#[test]
+fn cursor_and_validator_agree_at_the_discrete_interval_boundary() {
+    let timing = StepDirTiming::new(1_100, 1_100, 1_000, 1_000).unwrap();
+    let timebase = StepTimeBase::new(1_000_000).unwrap();
+    let too_short = Err(PlannerError::StepIntervalTooShort);
+
+    for (next_tick, expected_discrete, expected_total) in [
+        (102, too_short, too_short),
+        (103, too_short, Ok(())),
+        (104, Ok(()), Ok(())),
+        (105, Ok(()), Ok(())),
+    ] {
+        let events = [
+            event(100, Some(Positive), None),
+            event(next_tick, Some(Positive), None),
+        ];
+        let mut cursor = StepDirScheduleCursor::new(timing, timebase, None, None).unwrap();
+        let scheduled = events
+            .into_iter()
+            .try_for_each(|event| cursor.schedule(event).map(|_| ()));
+        let validated = validate_step_dir_schedule(events.map(Ok), timing, timebase, None, None);
+
+        assert_eq!(scheduled, expected_discrete, "next_tick={next_tick}");
+        assert_eq!(validated, scheduled, "next_tick={next_tick}");
+        assert_eq!(
+            validate_step_dir_intervals(events.map(Ok), timing, timebase),
+            expected_total,
+            "next_tick={next_tick}"
+        );
+    }
 }
 
 #[test]
@@ -145,9 +177,9 @@ fn propagates_an_error_from_the_source_iterator() {
 }
 
 #[test]
-fn checks_that_the_minimum_step_interval_fits_before_reading_events() {
+fn checks_that_the_discrete_step_interval_fits_before_reading_events() {
     let timing = StepDirTiming::new(u64::MAX, u64::MAX, 1, 1).unwrap();
-    let timebase = StepTimeBase::new(u64::MAX).unwrap();
+    let timebase = StepTimeBase::new(500_000_000).unwrap();
     let events = core::iter::from_fn(|| panic!("se consumió un evento con un intervalo inválido"));
 
     assert_eq!(

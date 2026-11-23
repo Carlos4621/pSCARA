@@ -775,14 +775,28 @@ fn interval_verified_builder_emits_the_final_step_after_an_off_grid_end() -> Res
 }
 
 #[test]
-fn schedule_verified_builder_emits_a_valid_reversal() -> Result<(), PlannerError> {
+fn schedule_verified_builder_requires_enough_ticks_for_a_valid_reversal() -> Result<(), PlannerError>
+{
     let points = points([[0.0, 0.0], [25.0 / 16.0, 0.0], [1.0, 0.0]]);
     let limits = limits();
     let timed = timed_path(&points, &[0.0; 3], &limits);
     let converter = JointToStepsConverter::new(2.0, 2.0)?;
-    let timebase = StepTimeBase::new(3)?;
     let timing = StepDirTiming::new(1, 1, 1, 1)?;
-    let mut boundaries = [u64::MAX; 4];
+    let mut boundaries_at_three_hz = [u64::MAX; 4];
+    let result = build_schedule_verified_step_dir_events(
+        timed,
+        converter,
+        StepTimeBase::new(3)?,
+        timing,
+        Some(StepDirection::Positive),
+        None,
+        &mut boundaries_at_three_hz,
+    );
+    assert_eq!(result.err(), Some(PlannerError::StepIntervalTooShort));
+    assert_eq!(boundaries_at_three_hz, [0, 7, 8, 12]);
+
+    let timebase = StepTimeBase::new(6)?;
+    let mut boundaries = [u64::MAX; 3];
 
     {
         let mut events = build_schedule_verified_step_dir_events(
@@ -796,10 +810,10 @@ fn schedule_verified_builder_emits_a_valid_reversal() -> Result<(), PlannerError
         )?;
 
         for (tick, direction) in [
-            (3, StepDirection::Positive),
-            (4, StepDirection::Positive),
-            (6, StepDirection::Positive),
-            (10, StepDirection::Negative),
+            (5, StepDirection::Positive),
+            (8, StepDirection::Positive),
+            (11, StepDirection::Positive),
+            (20, StepDirection::Negative),
         ] {
             assert_eq!(
                 events.next(),
@@ -813,7 +827,7 @@ fn schedule_verified_builder_emits_a_valid_reversal() -> Result<(), PlannerError
         assert_eq!(events.next(), None);
     }
 
-    assert_eq!(boundaries, [0, 7, 8, 12]);
+    assert_eq!(boundaries, [0, 15, 24]);
     Ok(())
 }
 
@@ -823,11 +837,11 @@ fn verified_trajectory_streams_steps_and_schedules_its_reversal() -> Result<(), 
     let limits = limits();
     let timed = timed_path(&points, &[0.0; 3], &limits);
     let converter = JointToStepsConverter::new(2.0, 2.0)?;
-    let timebase = StepTimeBase::new(3)?;
-    let timing = StepDirTiming::new(1, 1, 500_000_000, 500_000_000)?;
+    let timebase = StepTimeBase::new(6)?;
+    let timing = StepDirTiming::new(1, 1, 1_000_000_000, 500_000_000)?;
     let first_direction = Some(StepDirection::Positive);
     let second_direction = None;
-    let mut boundaries = [u64::MAX; 4];
+    let mut boundaries = [u64::MAX; 3];
 
     {
         let events = build_schedule_verified_step_dir_events(
@@ -844,13 +858,13 @@ fn verified_trajectory_streams_steps_and_schedules_its_reversal() -> Result<(), 
         let mut scheduled = StepDirScheduleIterator::new(events, cursor);
 
         for (step_tick, first_dir_change) in [
-            (3, None),
-            (4, None),
-            (6, None),
+            (5, None),
+            (8, None),
+            (11, None),
             (
-                10,
+                20,
                 Some(ScheduledDirChange {
-                    tick: 8,
+                    tick: 14,
                     direction: StepDirection::Negative,
                 }),
             ),
@@ -869,7 +883,7 @@ fn verified_trajectory_streams_steps_and_schedules_its_reversal() -> Result<(), 
         assert_eq!(scheduled.next(), None);
     }
 
-    assert_eq!(boundaries, [0, 7, 8, 12]);
+    assert_eq!(boundaries, [0, 15, 24]);
     Ok(())
 }
 
@@ -879,9 +893,9 @@ fn schedule_verified_builder_rejects_an_impossible_reversal() -> Result<(), Plan
     let limits = limits();
     let timed = timed_path(&points, &[0.0; 3], &limits);
     let converter = JointToStepsConverter::new(2.0, 2.0)?;
-    let timebase = StepTimeBase::new(3)?;
-    let timing = StepDirTiming::new(1, 1, 1_000_000_000, 500_000_000)?;
-    let mut boundaries = [u64::MAX; 4];
+    let timebase = StepTimeBase::new(6)?;
+    let timing = StepDirTiming::new(1, 1, 1_000_000_000, 600_000_000)?;
+    let mut boundaries = [u64::MAX; 3];
 
     let result = build_schedule_verified_step_dir_events(
         timed,
@@ -894,7 +908,7 @@ fn schedule_verified_builder_rejects_an_impossible_reversal() -> Result<(), Plan
     );
 
     assert_eq!(result.err(), Some(PlannerError::DirChangeNotSchedulable));
-    assert_eq!(boundaries, [0, 7, 8, 12]);
+    assert_eq!(boundaries, [0, 15, 24]);
     Ok(())
 }
 

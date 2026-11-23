@@ -1,6 +1,7 @@
 use crate::{PlannerError, StepDirEvent, StepDirTiming, StepTimeBase};
 
 /// Comprueba la separación entre pulsos STEP de cada motor en una sola pasada.
+/// Redondea a ticks la duración total de HIGH y LOW y permite flancos de bajada entre ticks.
 /// Los ticks de los eventos deben ser estrictamente crecientes.
 pub fn validate_step_dir_intervals<I>(
     events: I,

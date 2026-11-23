@@ -93,7 +93,7 @@ pub fn build_interval_verified_step_dir_events<'a>(
     Ok(into_step_dir_events(events))
 }
 
-/// Verifica los eventos, los intervalos STEP y las ventanas de cambio de DIR.
+/// Verifica los eventos, los intervalos STEP discretos y las ventanas de cambio de DIR.
 /// Devuelve un iterador nuevo para la ejecución si toda la secuencia es válida.
 /// Las direcciones iniciales conocidas se consideran estables desde el tick cero.
 /// Si la verificación falla, el búfer puede contener las fronteras generadas.

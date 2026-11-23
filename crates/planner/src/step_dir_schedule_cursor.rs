@@ -16,6 +16,7 @@ pub struct StepDirScheduleCursor {
 }
 
 impl StepDirScheduleCursor {
+    /// Calcula el intervalo STEP con los tiempos HIGH y LOW redondeados por separado.
     /// Considera las direcciones iniciales conocidas estables desde el tick cero.
     pub fn new(
         timing: StepDirTiming,
@@ -23,7 +24,7 @@ impl StepDirScheduleCursor {
         initial_first_direction: Option<StepDirection>,
         initial_second_direction: Option<StepDirection>,
     ) -> Result<Self, PlannerError> {
-        let min_step_interval = timing.min_step_interval_ticks(timebase)?;
+        let min_step_interval = timing.min_discrete_step_interval_ticks(timebase)?;
 
         Ok(Self {
             state: StepDirState::new(initial_first_direction, initial_second_direction),

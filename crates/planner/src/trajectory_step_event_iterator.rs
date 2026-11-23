@@ -37,7 +37,7 @@ impl<F> TrajectoryStepEventIterator<F> {
         })
     }
 
-    pub fn apply_axis_step(position: &mut i64, movement: AxisStepMove) {
+    pub(crate) fn apply_axis_step(position: &mut i64, movement: AxisStepMove) {
         match (movement.pulses, movement.direction) {
             (0, _) => {}
 

@@ -204,22 +204,32 @@ fn rejects_multiple_steps_on_either_axis_in_a_later_segment() {
 }
 
 #[test]
-fn a_real_round_trip_emits_the_same_events_as_tick_by_tick_sampling() {
+fn a_real_round_trip_emits_the_same_events_as_tick_by_tick_sampling() -> Result<(), PlannerError> {
     let points = [[0.0, 0.0], [1.0, 0.0], [0.0, 0.0]].map(|[a, b]| JointAngles::new(a, b).unwrap());
-    let velocity = JointVelocityLimits::new(10.0, 10.0).unwrap();
-    let acceleration = JointAccelerationLimits::new(1.0, 1.0).unwrap();
-    let profiles =
-        CoordinatedJointPathProfiles::new(&points, &[0.0; 3], &velocity, &acceleration).unwrap();
-    let timed = TimedCoordinatedJointPathProfiles::new(profiles).unwrap();
-    let trajectory = CoordinatedJointTrajectory::new(timed).unwrap();
-    let converter = JointToStepsConverter::new(4.0, 4.0).unwrap();
-    let timebase = StepTimeBase::new(8).unwrap();
+    let velocity = JointVelocityLimits::new(10.0, 10.0)?;
+    let acceleration = JointAccelerationLimits::new(1.0, 1.0)?;
+    let profiles = CoordinatedJointPathProfiles::new(&points, &[0.0; 3], &velocity, &acceleration)?;
+    let timed = TimedCoordinatedJointPathProfiles::new(profiles)?;
+    let timebase = StepTimeBase::new(8)?;
+
+    let mut boundaries = [0_u64; 3];
+    for (i, profile) in timed.enumerate() {
+        let end_time = profile?.end_time()?;
+        let end_tick = timebase.seconds_to_ticks(end_time)?;
+        assert_eq!(timebase.ticks_to_seconds(end_tick), end_time);
+        boundaries[i + 1] = end_tick;
+    }
+    assert_eq!(boundaries, [0, 16, 32]);
+
+    let trajectory = CoordinatedJointTrajectory::new(timed)?;
+    let converter = JointToStepsConverter::new(4.0, 4.0)?;
     let sample = |tick| converter.convert(trajectory.position_at(timebase.ticks_to_seconds(tick))?);
-    let initial = sample(0).unwrap();
+    let [start_tick, _, end_tick] = boundaries;
+    let initial = sample(start_tick)?;
     let mut expected = Vec::new();
     let mut previous = initial;
-    for tick in 1..=32 {
-        let position = sample(tick).unwrap();
+    for tick in start_tick + 1..=end_tick {
+        let position = sample(tick)?;
         if previous != position {
             expected.push((tick, MotorStepMove::new(previous, position)));
         }
@@ -231,9 +241,10 @@ fn a_real_round_trip_emits_the_same_events_as_tick_by_tick_sampling() {
         [4, 7, 10, 12, 21, 23, 26, 29]
     );
 
-    let mut iterator =
-        SegmentedTrajectoryStepEventIterator::new(&[0, 16, 32], initial, sample).unwrap();
+    let mut iterator = SegmentedTrajectoryStepEventIterator::new(&boundaries, initial, sample)?;
     for event in expected {
         assert_eq!(iterator.next(), Some(Ok(event)));
     }
+    assert_exhausted(&mut iterator);
+    Ok(())
 }

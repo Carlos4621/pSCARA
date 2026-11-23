@@ -99,6 +99,9 @@ pub use timed_pin_operation::{MotorAxis, PinOperation, TimedPinOperation, expand
 mod pin_operation_batch;
 pub use pin_operation_batch::{PinOperationBatch, StepPinLevel};
 
+mod pending_pin_operation_buffer;
+pub use pending_pin_operation_buffer::PendingPinOperationBuffer;
+
 mod coordinated_step_interpolator;
 pub use coordinated_step_interpolator::{CoordinatedStepInterpolator, StepEvent};
 

@@ -54,6 +54,8 @@ pub enum PlannerError {
     DirChangeNotSchedulable,
     /// Dos operaciones contradictorias sobre el mismo pin en un tick.
     ConflictingPinOperations,
+    /// No existe espacio para otro grupo de operaciones pendientes.
+    InsufficientPinOperationBuffer,
 }
 
 impl PlannerError {

@@ -1,8 +1,8 @@
 use kinematics::JointAngles;
 
 use super::{
-    validate_step_frequencies, validate_subtick_boundaries, validate_subtick_boundary,
-    validate_subtick_excursion,
+    validate_motor_position_range, validate_step_frequencies, validate_subtick_boundaries,
+    validate_subtick_boundary, validate_subtick_excursion,
 };
 use crate::{
     CoordinatedJointPathProfiles, CoordinatedJointTrajectory, JointAccelerationLimits,
@@ -47,6 +47,95 @@ fn timed_trajectory<'a>(
 > {
     let timed = timed_profiles(points, speeds, limits)?;
     Ok((timed, CoordinatedJointTrajectory::new(timed)?))
+}
+
+#[test]
+fn accepts_representable_motor_positions_at_every_segment_endpoint() -> Result<(), PlannerError> {
+    let last_positive = 1.0_f64.next_down();
+    let points = [[-1.0, last_positive], [0.0, 0.0], [-0.5, last_positive]].map(angles);
+    let limits = limits()?;
+    let timed = timed_profiles(&points, &[0.0; 3], &limits)?;
+    let scale = (1_u64 << 63) as f64;
+    let converter = JointToStepsConverter::new(scale, scale)?;
+
+    assert_eq!(
+        converter.convert(points[0]),
+        Ok(steps(i64::MIN, i64::MAX - 1023))
+    );
+    assert_eq!(validate_motor_position_range(timed, &converter), Ok(()));
+    Ok(())
+}
+
+#[test]
+fn rejects_an_out_of_range_initial_position_even_with_a_valid_end() -> Result<(), PlannerError> {
+    let limits = limits()?;
+    let converter = JointToStepsConverter::new((1_u64 << 63) as f64, 1.0)?;
+
+    for (initial, final_position) in [(1.0, 0.75), ((-1.0_f64).next_down(), -1.0)] {
+        let points = [[initial, 0.0], [final_position, 0.0]].map(angles);
+        let timed = timed_profiles(&points, &[0.0; 2], &limits)?;
+        assert!(converter.convert(points[1]).is_ok());
+        assert_eq!(
+            validate_motor_position_range(timed, &converter),
+            Err(PlannerError::NumericalFailure)
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn rejects_an_out_of_range_final_position_even_with_a_valid_start() -> Result<(), PlannerError> {
+    let limits = limits()?;
+    let converter = JointToStepsConverter::new((1_u64 << 63) as f64, 1.0)?;
+
+    for (initial, final_position) in [(0.75, 1.0), (-1.0, (-1.0_f64).next_down())] {
+        let points = [[initial, 0.0], [final_position, 0.0]].map(angles);
+        let timed = timed_profiles(&points, &[0.0; 2], &limits)?;
+        assert!(converter.convert(points[0]).is_ok());
+        assert_eq!(
+            validate_motor_position_range(timed, &converter),
+            Err(PlannerError::NumericalFailure)
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn rejects_overflow_in_a_later_segment_after_a_representable_prefix() -> Result<(), PlannerError> {
+    let initial_second = 1.0_f64.next_down();
+    let points = [[0.0, initial_second], [0.25, initial_second], [0.25, 1.0]].map(angles);
+    let (velocity, _) = limits()?;
+    let limits = (
+        velocity,
+        JointAccelerationLimits::new(1.0, 1.0 - initial_second)?,
+    );
+    let converter = JointToStepsConverter::new(4.0, (1_u64 << 63) as f64)?;
+
+    let prefix = timed_profiles(&points[..2], &[0.0; 2], &limits)?;
+    assert_eq!(validate_motor_position_range(prefix, &converter), Ok(()));
+
+    let timed = timed_profiles(&points, &[0.0; 3], &limits)?;
+    assert_eq!(
+        validate_motor_position_range(timed, &converter),
+        Err(PlannerError::NumericalFailure)
+    );
+    Ok(())
+}
+
+#[test]
+fn rejects_a_segment_when_only_the_second_motor_is_out_of_range() -> Result<(), PlannerError> {
+    let points = [[0.0, 0.0], [0.25, 1.0]].map(angles);
+    let limits = limits()?;
+    let timed = timed_profiles(&points, &[0.0; 2], &limits)?;
+    let converter = JointToStepsConverter::new(4.0, (1_u64 << 63) as f64)?;
+
+    assert_eq!(converter.convert(points[0]), Ok(steps(0, 0)));
+    assert_eq!(converter.convert(angles([0.25, 0.0])), Ok(steps(1, 0)));
+    assert_eq!(
+        validate_motor_position_range(timed, &converter),
+        Err(PlannerError::NumericalFailure)
+    );
+    Ok(())
 }
 
 #[test]

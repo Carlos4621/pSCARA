@@ -32,6 +32,25 @@ pub fn build_trajectory_step_events<'a>(
     )
 }
 
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "Pendiente de integrar con el constructor público")
+)]
+fn validate_motor_position_range(
+    profiles: TimedCoordinatedJointPathProfiles<'_>,
+    converter: &JointToStepsConverter,
+) -> Result<(), PlannerError> {
+    for profile in profiles {
+        let profile = profile?;
+        let initial_position = profile.position_at(profile.start_time())?;
+        let final_position = profile.position_at(profile.end_time()?)?;
+
+        converter.convert(initial_position)?;
+        converter.convert(final_position)?;
+    }
+    Ok(())
+}
+
 fn validate_step_frequencies(
     profiles: TimedCoordinatedJointPathProfiles<'_>,
     converter: &JointToStepsConverter,

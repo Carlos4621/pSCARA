@@ -318,7 +318,7 @@ fn an_insufficient_boundary_buffer_is_untouched_and_can_be_retried() {
 }
 
 #[test]
-fn rejects_an_off_grid_end_even_with_a_sufficient_clock() -> Result<(), PlannerError> {
+fn an_off_grid_end_with_a_sufficient_clock_fails_during_sampling() -> Result<(), PlannerError> {
     let points = points([[0.0, 0.0], [9.0 / 16.0, 0.0]]);
     let limits = limits();
     let timed = timed_path(&points, &[0.0; 2], &limits);
@@ -336,37 +336,50 @@ fn rejects_an_off_grid_end_even_with_a_sufficient_clock() -> Result<(), PlannerE
     assert_eq!(timebase.bracketing_ticks(end_time)?, (1, 2));
 
     let mut boundaries = [19, 23];
-    let result = build_trajectory_step_events(timed, converter, timebase, &mut boundaries);
-    assert_eq!(result.err(), Some(PlannerError::InvalidTicks));
-    assert_eq!(boundaries, [19, 23]);
+    let result = build_trajectory_step_events(timed, converter, timebase, &mut boundaries)?
+        .collect::<Result<Vec<_>, _>>();
+    assert_eq!(result, Err(PlannerError::InvalidTime));
+    assert_eq!(boundaries, [0, 2]);
     Ok(())
 }
 
 #[test]
-fn invalid_tick_boundaries_and_tick_overflow_are_construction_errors() {
+fn off_grid_ends_after_an_aligned_internal_boundary_fail_during_sampling()
+-> Result<(), PlannerError> {
     let limits = limits();
-    for (last_point, frequency, error) in [
-        (0.25 + 1.0 / 256.0, 1, PlannerError::InvalidTicks),
-        (0.25 + 9.0 / 16.0, 1, PlannerError::InvalidTicks),
-        (0.5, u64::MAX, PlannerError::NumericalFailure),
-    ] {
+    let timebase = StepTimeBase::new(1)?;
+    for (last_point, last_tick) in [(0.25 + 1.0 / 256.0, 2), (0.25 + 9.0 / 16.0, 3)] {
         let points = points([[0.0, 0.0], [0.25, 0.0], [last_point, 0.0]]);
         let timed = timed_path(&points, &[0.0; 3], &limits);
         let mut boundaries = [19, 23, 29];
-
         let result = build_trajectory_step_events(
             timed,
-            JointToStepsConverter::new(1.0, 1.0).unwrap(),
-            StepTimeBase::new(frequency).unwrap(),
+            JointToStepsConverter::new(1.0, 1.0)?,
+            timebase,
             &mut boundaries,
-        );
-        assert_eq!(
-            result.err(),
-            Some(error),
-            "last point {last_point} at {frequency} Hz"
-        );
-        assert_eq!(boundaries, [19, 23, 29]);
+        )?
+        .collect::<Result<Vec<_>, _>>();
+        assert_eq!(result, Err(PlannerError::InvalidTime));
+        assert_eq!(boundaries, [0, 1, last_tick]);
     }
+    Ok(())
+}
+
+#[test]
+fn tick_overflow_is_a_construction_error() -> Result<(), PlannerError> {
+    let points = points([[0.0, 0.0], [0.25, 0.0], [0.5, 0.0]]);
+    let limits = limits();
+    let timed = timed_path(&points, &[0.0; 3], &limits);
+    let mut boundaries = [19, 23, 29];
+    let result = build_trajectory_step_events(
+        timed,
+        JointToStepsConverter::new(1.0, 1.0)?,
+        StepTimeBase::new(u64::MAX)?,
+        &mut boundaries,
+    );
+    assert_eq!(result.err(), Some(PlannerError::NumericalFailure));
+    assert_eq!(boundaries, [19, 23, 29]);
+    Ok(())
 }
 
 #[test]

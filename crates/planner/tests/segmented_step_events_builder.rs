@@ -125,17 +125,13 @@ fn rejects_started_and_exhausted_timed_paths_without_sampling() {
 }
 
 #[test]
-fn rejects_invalid_tick_boundaries_and_overflow_before_accessing_the_sampler() {
+fn builds_off_grid_final_boundaries_without_accessing_the_sampler() {
     let limits = limits();
+    let base = StepTimeBase::new(1).unwrap();
 
-    for (last_point, frequency, error) in [
-        (0.25 + 1.0 / 256.0, 1, PlannerError::InvalidTicks),
-        (0.25 + 9.0 / 16.0, 1, PlannerError::InvalidTicks),
-        (0.5, u64::MAX, PlannerError::NumericalFailure),
-    ] {
+    for (last_point, last_tick) in [(0.25 + 1.0 / 256.0, 2), (0.25 + 9.0 / 16.0, 3)] {
         let points = points([0.0, 0.25, last_point]);
         let timed = timed_path(&points, &[0.0; 3], &limits);
-        let base = StepTimeBase::new(frequency).unwrap();
         let mut boundaries = [19, 23, 29];
 
         let result = build_segmented_step_events(
@@ -145,13 +141,27 @@ fn rejects_invalid_tick_boundaries_and_overflow_before_accessing_the_sampler() {
             steps(3, -5),
             unexpected_sample,
         );
-        assert_eq!(
-            result.err(),
-            Some(error),
-            "last point {last_point} at {frequency} Hz"
-        );
-        assert_eq!(boundaries, [19, 23, 29]);
+        assert_eq!(result.err(), None, "last point {last_point}");
+        assert_eq!(boundaries, [0, 1, last_tick]);
     }
+}
+
+#[test]
+fn rejects_tick_overflow_before_accessing_the_sampler() {
+    let points = points([0.0, 0.25, 0.5]);
+    let limits = limits();
+    let timed = timed_path(&points, &[0.0; 3], &limits);
+    let base = StepTimeBase::new(u64::MAX).unwrap();
+    let mut boundaries = [19, 23, 29];
+    let result = build_segmented_step_events(
+        timed,
+        base,
+        &mut boundaries,
+        steps(3, -5),
+        unexpected_sample,
+    );
+    assert_eq!(result.err(), Some(PlannerError::NumericalFailure));
+    assert_eq!(boundaries, [19, 23, 29]);
 }
 
 #[test]

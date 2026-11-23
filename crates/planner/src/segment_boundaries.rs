@@ -58,7 +58,7 @@ pub fn generate_segment_boundaries(
 /// Genera fronteras estrictamente crecientes desde el tick cero.
 ///
 /// Cada frontera interna aporta los ticks que la rodean, omitiendo duplicados.
-/// El final de la trayectoria debe coincidir con un tick.
+/// La frontera final aporta únicamente el tick superior.
 /// Devuelve el número de fronteras escritas y deja el búfer intacto si hay un error.
 pub fn generate_guarded_segment_boundaries(
     profiles: TimedCoordinatedJointPathProfiles<'_>,
@@ -94,11 +94,17 @@ fn visit_guarded_boundaries(
         }
 
         let (lower, upper) = timebase.bracketing_ticks(profile.end_time()?)?;
-        if profiles.peek().is_none() && (lower != upper || upper == 0) {
-            return Err(PlannerError::InvalidTicks);
-        }
+        let ticks = [lower, upper];
+        let ticks = if profiles.peek().is_none() {
+            if upper == 0 {
+                return Err(PlannerError::InvalidTicks);
+            }
+            &ticks[1..]
+        } else {
+            &ticks[..]
+        };
 
-        for tick in [lower, upper] {
+        for &tick in ticks {
             if tick <= previous_tick {
                 continue;
             }

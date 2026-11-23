@@ -293,6 +293,11 @@ fn guarded_boundaries_share_ticks_with_close_junctions_and_endpoints() {
             &[0, 1][..],
         ),
         (
+            [0.0, 1.0 / 64.0, 2.0 / 64.0, 3.0 / 64.0],
+            [0.25, 0.5, 0.75],
+            &[0, 1][..],
+        ),
+        (
             [0.0, 81.0 / 64.0, 82.0 / 64.0, 86.0 / 64.0],
             [2.25, 2.5, 3.0],
             &[0, 2, 3][..],
@@ -342,7 +347,7 @@ fn guarded_boundaries_check_capacity_after_adding_both_internal_ticks() {
 }
 
 #[test]
-fn guarded_boundaries_reject_an_off_grid_final_time_before_writing() {
+fn guarded_boundaries_add_only_the_upper_tick_for_an_off_grid_end() {
     let points = points([0.0, 25.0 / 16.0, 21.0 / 16.0]);
     let limits = limits();
     let timed = timed_path(&points, &[0.0; 3], &limits);
@@ -351,10 +356,41 @@ fn guarded_boundaries_reject_an_off_grid_final_time_before_writing() {
 
     assert_eq!(end_times(timed), [2.5, 3.5]);
     assert_eq!(
-        generate_guarded_segment_boundaries(timed, base, &mut buffer),
-        Err(PlannerError::InvalidTicks)
+        generate_guarded_segment_boundaries(timed, base, &mut buffer[..3]),
+        Err(PlannerError::InsufficientBoundaryBuffer)
     );
     assert_eq!(buffer, [UNWRITTEN; 6]);
+    assert_eq!(
+        generate_guarded_segment_boundaries(timed, base, &mut buffer),
+        Ok(4)
+    );
+    assert_eq!(buffer, [0, 7, 8, 11, UNWRITTEN, UNWRITTEN]);
+}
+
+#[test]
+fn guarded_boundaries_round_a_single_off_grid_segment_up_to_its_final_tick() {
+    let points = points([0.0, 9.0 / 16.0]);
+    let limits = limits();
+    let timed = timed_path(&points, &[0.0; 2], &limits);
+    let base = StepTimeBase::new(1).unwrap();
+    let mut buffer = [UNWRITTEN; 2];
+
+    assert_eq!(end_times(timed), [1.5]);
+    assert_eq!(
+        generate_segment_boundaries(timed, base, &mut buffer),
+        Err(PlannerError::InvalidTicks)
+    );
+    assert_eq!(buffer, [UNWRITTEN; 2]);
+    assert_eq!(
+        generate_guarded_segment_boundaries(timed, base, &mut buffer[..1]),
+        Err(PlannerError::InsufficientBoundaryBuffer)
+    );
+    assert_eq!(buffer, [UNWRITTEN; 2]);
+    assert_eq!(
+        generate_guarded_segment_boundaries(timed, base, &mut buffer),
+        Ok(2)
+    );
+    assert_eq!(buffer, [0, 2]);
 }
 
 #[test]

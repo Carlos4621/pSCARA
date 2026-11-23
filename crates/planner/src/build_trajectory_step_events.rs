@@ -33,6 +33,22 @@ pub fn build_trajectory_step_events<'a>(
     )
 }
 
+/// Comprueba que la trayectoria pueda generar todos sus eventos STEP.
+///
+/// El búfer queda intacto ante un error de construcción. Si el error aparece
+/// durante el recorrido del iterador, puede contener las fronteras generadas.
+pub fn preflight_trajectory_step_events<'a>(
+    profiles: TimedCoordinatedJointPathProfiles<'a>,
+    converter: JointToStepsConverter,
+    timebase: StepTimeBase,
+    boundaries_buffer: &'a mut [u64],
+) -> Result<(), PlannerError> {
+    for event in build_trajectory_step_events(profiles, converter, timebase, boundaries_buffer)? {
+        event?;
+    }
+    Ok(())
+}
+
 fn validate_motor_position_range(
     profiles: TimedCoordinatedJointPathProfiles<'_>,
     converter: &JointToStepsConverter,

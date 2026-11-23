@@ -3,6 +3,7 @@ use planner::{
     CoordinatedJointPathProfiles, CoordinatedJointTrajectory, JointAccelerationLimits,
     JointToStepsConverter, JointVelocityLimits, MotorStepMove, MotorSteps, PlannerError,
     StepDirection, StepTimeBase, TimedCoordinatedJointPathProfiles, build_trajectory_step_events,
+    preflight_trajectory_step_events,
 };
 
 fn steps(first: i64, second: i64) -> MotorSteps {
@@ -531,5 +532,139 @@ fn an_insufficient_clock_leaves_the_buffer_intact_for_a_successful_retry()
             (6, MotorStepMove::new(steps(1, -1), steps(2, -1))),
         ]
     );
+    Ok(())
+}
+
+#[test]
+fn preflight_accepts_a_valid_trajectory_and_allows_rebuilding_its_events()
+-> Result<(), PlannerError> {
+    let points = points([[0.0, 0.0], [0.25, -0.25]]);
+    let limits = limits();
+    let timed = timed_path(&points, &[0.0; 2], &limits);
+    let timebase = StepTimeBase::new(8)?;
+    let mut boundaries = [19, 23];
+
+    preflight_trajectory_step_events(
+        timed,
+        JointToStepsConverter::new(8.0, 4.0)?,
+        timebase,
+        &mut boundaries,
+    )?;
+    assert_eq!(boundaries, [0, 8]);
+
+    {
+        let mut events = build_trajectory_step_events(
+            timed,
+            JointToStepsConverter::new(8.0, 4.0)?,
+            timebase,
+            &mut boundaries,
+        )?;
+        for expected in [
+            (3, MotorStepMove::new(steps(0, 0), steps(1, 0))),
+            (4, MotorStepMove::new(steps(1, 0), steps(1, -1))),
+            (6, MotorStepMove::new(steps(1, -1), steps(2, -1))),
+        ] {
+            assert_eq!(events.next(), Some(Ok(expected)));
+        }
+        assert_eq!(events.next(), None);
+    }
+    assert_eq!(boundaries, [0, 8]);
+    Ok(())
+}
+
+#[test]
+fn preflight_accepts_a_trajectory_ending_between_ticks() -> Result<(), PlannerError> {
+    let points = points([[0.0, 0.0], [9.0 / 16.0, 0.0]]);
+    let limits = limits();
+    let timed = timed_path(&points, &[0.0; 2], &limits);
+    let mut boundaries = [19, 23];
+
+    preflight_trajectory_step_events(
+        timed,
+        JointToStepsConverter::new(1.0, 1.0)?,
+        StepTimeBase::new(1)?,
+        &mut boundaries,
+    )?;
+    assert_eq!(boundaries, [0, 2]);
+    Ok(())
+}
+
+#[test]
+fn preflight_rejects_an_insufficient_clock_without_writing_boundaries() -> Result<(), PlannerError>
+{
+    let points = points([[0.0, 0.0], [0.25, -0.25]]);
+    let limits = limits();
+    let timed = timed_path(&points, &[0.0; 2], &limits);
+    let mut boundaries = [19, 23];
+
+    assert_eq!(
+        preflight_trajectory_step_events(
+            timed,
+            JointToStepsConverter::new(8.0, 4.0)?,
+            StepTimeBase::new(4)?,
+            &mut boundaries,
+        ),
+        Err(PlannerError::InsufficientTicksForSteps)
+    );
+    assert_eq!(boundaries, [19, 23]);
+    Ok(())
+}
+
+#[test]
+fn preflight_rejects_hidden_motion_without_writing_boundaries() -> Result<(), PlannerError> {
+    let points = points([[0.0, 0.0], [1.0 / 16.0, 0.0], [0.0, 0.0]]);
+    let limits = limits();
+    let timed = timed_path(&points, &[0.0; 3], &limits);
+    let mut boundaries = [19, 23];
+
+    assert_eq!(
+        preflight_trajectory_step_events(
+            timed,
+            JointToStepsConverter::new(16.0, 16.0)?,
+            StepTimeBase::new(1)?,
+            &mut boundaries,
+        ),
+        Err(PlannerError::SubtickMotionNotRepresentable)
+    );
+    assert_eq!(boundaries, [19, 23]);
+    Ok(())
+}
+
+#[test]
+fn preflight_propagates_an_iteration_error_after_a_valid_event() -> Result<(), PlannerError> {
+    // The next representable f64 angle above 2^53 is two steps away.
+    let limit = 1_i64 << 53;
+    let points = points([[(limit - 1) as f64, 0.0], [(limit + 2) as f64, 0.0]]);
+    let (velocity, _) = limits();
+    let limits = (velocity, JointAccelerationLimits::new(3.0, 1.0)?);
+    let timed = timed_path(&points, &[0.0; 2], &limits);
+    let timebase = StepTimeBase::new(8)?;
+    let mut probe_boundaries = [19, 23];
+    let mut events = build_trajectory_step_events(
+        timed,
+        JointToStepsConverter::new(1.0, 1.0)?,
+        timebase,
+        &mut probe_boundaries,
+    )?;
+    assert_eq!(
+        events.next(),
+        Some(Ok((
+            5,
+            MotorStepMove::new(steps(limit - 1, 0), steps(limit, 0))
+        )))
+    );
+    assert_eq!(events.next(), Some(Err(PlannerError::MultipleStepsOnTick)));
+
+    let mut boundaries = [19, 23];
+    assert_eq!(
+        preflight_trajectory_step_events(
+            timed,
+            JointToStepsConverter::new(1.0, 1.0)?,
+            timebase,
+            &mut boundaries,
+        ),
+        Err(PlannerError::MultipleStepsOnTick)
+    );
+    assert_eq!(boundaries, [0, 16]);
     Ok(())
 }

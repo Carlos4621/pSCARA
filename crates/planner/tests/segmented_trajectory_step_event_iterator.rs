@@ -7,8 +7,8 @@ use kinematics::JointAngles;
 use planner::{
     CoordinatedJointPathProfiles, CoordinatedJointTrajectory, JointAccelerationLimits,
     JointToStepsConverter, JointVelocityLimits, MotorStepMove, MotorSteps, PlannerError,
-    SegmentedTrajectoryStepEventIterator, StepTimeBase, TimedCoordinatedJointPathProfiles,
-    build_segmented_step_events,
+    SegmentedTrajectoryStepEventIterator, StepDirection, StepTimeBase,
+    TimedCoordinatedJointPathProfiles, build_segmented_step_events,
 };
 
 fn steps(first: i64, second: i64) -> MotorSteps {
@@ -240,5 +240,71 @@ fn a_real_round_trip_emits_the_same_events_as_tick_by_tick_sampling() -> Result<
     }
     assert_exhausted(&mut iterator);
     assert_eq!(boundaries, [0, 16, 32, 48, 64]);
+    Ok(())
+}
+
+#[test]
+fn a_two_motor_round_trip_matches_tick_by_tick_sampling() -> Result<(), PlannerError> {
+    let points =
+        [[0.0, 0.0], [1.0, -0.5], [0.0, 0.0]].map(|[a, b]| JointAngles::new(a, b).unwrap());
+    let velocity = JointVelocityLimits::new(10.0, 10.0)?;
+    let acceleration = JointAccelerationLimits::new(1.0, 1.0)?;
+    let profiles = CoordinatedJointPathProfiles::new(&points, &[0.0; 3], &velocity, &acceleration)?;
+    let timed = TimedCoordinatedJointPathProfiles::new(profiles)?;
+    let trajectory = CoordinatedJointTrajectory::new(timed)?;
+    let converter = JointToStepsConverter::new(4.0, 4.0)?;
+    let timebase = StepTimeBase::new(8)?;
+
+    let duration = timed
+        .last()
+        .expect("round trip has two profiles")?
+        .end_time()?;
+    assert_eq!(duration, 4.0);
+    let end_tick = timebase.seconds_to_ticks(duration)?;
+
+    let sample = |tick| {
+        let time = timebase.ticks_to_seconds(tick);
+        let angles = trajectory.position_at(time)?;
+        converter.convert(angles)
+    };
+    let initial_position = sample(0)?;
+    assert_eq!(initial_position, steps(0, 0));
+    assert_eq!(sample(16)?, steps(4, -2));
+    assert_eq!(sample(end_tick)?, initial_position);
+
+    let mut expected = Vec::new();
+    let mut previous = initial_position;
+    for tick in 1..=end_tick {
+        let position = sample(tick)?;
+        if position != previous {
+            expected.push((tick, MotorStepMove::new(previous, position)));
+        }
+        previous = position;
+    }
+
+    let mut boundaries = [0_u64; 3];
+    let events =
+        build_segmented_step_events(timed, timebase, &mut boundaries, initial_position, sample)?;
+    let result = events.collect::<Result<Vec<_>, _>>()?;
+    assert_eq!(boundaries, [0, 16, 32]);
+    assert_eq!(result, expected);
+    assert!(result.windows(2).all(|pair| pair[0].0 < pair[1].0));
+
+    let mut position = initial_position;
+    for (tick, movement) in result {
+        for (axis, movement) in [
+            (&mut position.first, movement.first()),
+            (&mut position.second, movement.second()),
+        ] {
+            assert!(movement.pulses <= 1, "tick {tick}");
+            let pulses = i64::try_from(movement.pulses).unwrap();
+            match movement.direction {
+                StepDirection::Positive => *axis += pulses,
+                StepDirection::Negative => *axis -= pulses,
+            }
+        }
+        assert_eq!(position, sample(tick)?, "tick {tick}");
+    }
+    assert_eq!(position, steps(0, 0));
     Ok(())
 }

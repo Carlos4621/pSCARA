@@ -2,8 +2,9 @@ use kinematics::JointAngles;
 use planner::{
     CoordinatedJointPathProfiles, CoordinatedJointTrajectory, JointAccelerationLimits,
     JointToStepsConverter, JointVelocityLimits, MotorStepMove, MotorSteps, PlannerError,
-    StepDirection, StepTimeBase, TimedCoordinatedJointPathProfiles, build_trajectory_step_events,
-    build_verified_trajectory_step_events, preflight_trajectory_step_events,
+    StepDirEvent, StepDirection, StepTimeBase, TimedCoordinatedJointPathProfiles,
+    build_trajectory_step_events, build_verified_trajectory_step_events, into_step_dir_events,
+    preflight_trajectory_step_events,
 };
 
 fn steps(first: i64, second: i64) -> MotorSteps {
@@ -651,6 +652,41 @@ fn verified_builder_preserves_the_original_two_motor_event_sequence() -> Result<
 
     assert_eq!(original_boundaries, [0, 16, 32, 37]);
     assert_eq!(verified_boundaries, original_boundaries);
+    Ok(())
+}
+
+#[test]
+fn verified_trajectory_can_stream_step_dir_events() -> Result<(), PlannerError> {
+    let points = points([[0.0, 0.0], [0.25, -0.25]]);
+    let limits = limits();
+    let timed = timed_path(&points, &[0.0; 2], &limits);
+    let converter = JointToStepsConverter::new(8.0, 4.0)?;
+    let timebase = StepTimeBase::new(8)?;
+    let mut boundaries = [19, 23];
+
+    {
+        let movement_events =
+            build_verified_trajectory_step_events(timed, converter, timebase, &mut boundaries)?;
+        let mut events = into_step_dir_events(movement_events);
+
+        for (tick, first_direction, second_direction) in [
+            (3, Some(StepDirection::Positive), None),
+            (4, None, Some(StepDirection::Negative)),
+            (6, Some(StepDirection::Positive), None),
+        ] {
+            assert_eq!(
+                events.next(),
+                Some(Ok(StepDirEvent {
+                    tick,
+                    first_direction,
+                    second_direction,
+                }))
+            );
+        }
+        assert_eq!(events.next(), None);
+    }
+
+    assert_eq!(boundaries, [0, 8]);
     Ok(())
 }
 

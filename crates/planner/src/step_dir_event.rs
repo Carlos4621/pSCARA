@@ -25,3 +25,13 @@ impl StepDirEvent {
         })
     }
 }
+
+/// Convierte los movimientos en eventos STEP/DIR bajo demanda y propaga sus errores.
+pub fn into_step_dir_events<I>(
+    events: I,
+) -> impl Iterator<Item = Result<StepDirEvent, PlannerError>>
+where
+    I: Iterator<Item = Result<(u64, MotorStepMove), PlannerError>>,
+{
+    events.map(|event| event.and_then(|(tick, movement)| StepDirEvent::new(tick, movement)))
+}

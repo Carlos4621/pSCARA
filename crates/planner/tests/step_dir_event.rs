@@ -1,6 +1,8 @@
+use core::cell::Cell;
 use planner::{
     MotorStepMove, MotorSteps, PlannerError, StepDirEvent,
     StepDirection::{Negative, Positive},
+    into_step_dir_events,
 };
 
 fn steps(first: i64, second: i64) -> MotorSteps {
@@ -76,4 +78,65 @@ fn more_than_one_pulse_on_either_motor_rejects_the_event() {
             Err(PlannerError::MultipleStepsOnTick)
         );
     }
+}
+
+#[test]
+fn converts_a_sequence_on_demand_and_preserves_ticks_and_directions() {
+    let consumed = Cell::new(0);
+    let source = [
+        Ok((150, MotorStepMove::new(steps(10, 5), steps(11, 4)))),
+        Ok((400, MotorStepMove::new(steps(11, 4), steps(10, 4)))),
+        Ok((u64::MAX, MotorStepMove::new(steps(10, 4), steps(10, 5)))),
+    ];
+    let mut events = into_step_dir_events(
+        source
+            .into_iter()
+            .inspect(|_| consumed.set(consumed.get() + 1)),
+    );
+
+    assert_eq!(consumed.get(), 0);
+    for (index, (tick, first_direction, second_direction)) in [
+        (150, Some(Positive), Some(Negative)),
+        (400, Some(Negative), None),
+        (u64::MAX, None, Some(Positive)),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        assert_eq!(
+            events.next(),
+            Some(Ok(StepDirEvent {
+                tick,
+                first_direction,
+                second_direction,
+            }))
+        );
+        assert_eq!(consumed.get(), index + 1);
+    }
+    assert_eq!(events.next(), None);
+}
+
+#[test]
+fn propagates_source_and_conversion_errors_at_their_original_positions() {
+    let origin = steps(0, 0);
+    let source = [
+        Err(PlannerError::InvalidTime),
+        Ok((8, MotorStepMove::new(origin, steps(0, 2)))),
+        Ok((9, MotorStepMove::new(origin, steps(1, 0)))),
+        Err(PlannerError::NumericalFailure),
+    ];
+    let mut events = into_step_dir_events(source.into_iter());
+
+    assert_eq!(events.next(), Some(Err(PlannerError::InvalidTime)));
+    assert_eq!(events.next(), Some(Err(PlannerError::MultipleStepsOnTick)));
+    assert_eq!(
+        events.next(),
+        Some(Ok(StepDirEvent {
+            tick: 9,
+            first_direction: Some(Positive),
+            second_direction: None,
+        }))
+    );
+    assert_eq!(events.next(), Some(Err(PlannerError::NumericalFailure)));
+    assert_eq!(events.next(), None);
 }

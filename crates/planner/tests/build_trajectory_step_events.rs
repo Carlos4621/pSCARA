@@ -85,6 +85,67 @@ fn builds_a_two_motor_round_trip_from_a_nonzero_initial_position() -> Result<(),
 }
 
 #[test]
+fn a_two_motor_round_trip_replays_unequal_pulse_counts() -> Result<(), PlannerError> {
+    let points = points([[0.0, 0.0], [1.0, -0.5], [0.0, 0.0]]);
+    let limits = limits();
+    let timed = timed_path(&points, &[0.0; 3], &limits);
+    let base = StepTimeBase::new(8)?;
+    let trajectory = CoordinatedJointTrajectory::new(timed)?;
+    let converter = JointToStepsConverter::new(4.0, 4.0)?;
+    let sample = |tick| converter.convert(trajectory.position_at(base.ticks_to_seconds(tick))?);
+
+    let initial = sample(0)?;
+    assert_eq!(initial, steps(0, 0));
+    let mut expected = Vec::new();
+    let mut previous = initial;
+    for tick in 1..=32 {
+        let position = sample(tick)?;
+        if position != previous {
+            expected.push((tick, MotorStepMove::new(previous, position)));
+        }
+        previous = position;
+    }
+
+    let mut boundaries = [0_u64; 3];
+    let events = build_trajectory_step_events(timed, converter, base, &mut boundaries)?
+        .collect::<Result<Vec<_>, _>>()?;
+    assert_eq!(boundaries, [0, 16, 32]);
+    assert_eq!(events, expected);
+
+    let mut position = initial;
+    let mut outbound_pulses = [0, 0];
+    for (tick, movement) in events {
+        let first = movement.first();
+        let second = movement.second();
+        assert!(first.pulses <= 1 && second.pulses <= 1, "tick {tick}");
+
+        if tick <= boundaries[1] {
+            assert!(
+                first.pulses == 0 || first.direction == StepDirection::Positive,
+                "tick {tick}"
+            );
+            assert!(
+                second.pulses == 0 || second.direction == StepDirection::Negative,
+                "tick {tick}"
+            );
+            outbound_pulses[0] += first.pulses;
+            outbound_pulses[1] += second.pulses;
+        }
+
+        for (axis, movement) in [(&mut position.first, first), (&mut position.second, second)] {
+            let pulses = i64::try_from(movement.pulses).unwrap();
+            match movement.direction {
+                StepDirection::Positive => *axis += pulses,
+                StepDirection::Negative => *axis -= pulses,
+            }
+        }
+    }
+    assert_eq!(outbound_pulses, [4, 2]);
+    assert_eq!(position, initial);
+    Ok(())
+}
+
+#[test]
 fn a_trajectory_that_quantizes_to_no_steps_exhausts_at_the_clock_limits() {
     let points = points([[0.0, 0.0], [0.25, -0.25]]);
     let limits = limits();

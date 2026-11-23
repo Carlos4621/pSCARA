@@ -67,6 +67,31 @@ impl StepDirTiming {
         u64::try_from(whole_ticks + remaining_ticks).map_err(|_| PlannerError::NumericalFailure)
     }
 
+    /// Duración mínima del nivel alto de STEP en ticks, redondeada hacia arriba.
+    pub fn min_step_high_ticks(&self, timebase: StepTimeBase) -> Result<u64, PlannerError> {
+        nanoseconds_to_ticks(self.step_high_ns, timebase)
+    }
+
+    /// Duración mínima del nivel bajo de STEP entre pulsos en ticks, redondeada hacia arriba.
+    pub fn min_step_low_ticks(&self, timebase: StepTimeBase) -> Result<u64, PlannerError> {
+        nanoseconds_to_ticks(self.step_low_ns, timebase)
+    }
+
+    /// Intervalo mínimo entre flancos activos cuando todos los flancos caen en ticks enteros.
+    /// Redondea HIGH y LOW por separado y devuelve [`PlannerError::NumericalFailure`]
+    /// si alguna duración en ticks o su suma supera `u64::MAX`.
+    pub fn min_discrete_step_interval_ticks(
+        &self,
+        timebase: StepTimeBase,
+    ) -> Result<u64, PlannerError> {
+        let high_ticks = self.min_step_high_ticks(timebase)?;
+        let low_ticks = self.min_step_low_ticks(timebase)?;
+
+        high_ticks
+            .checked_add(low_ticks)
+            .ok_or(PlannerError::NumericalFailure)
+    }
+
     /// Tiempo mínimo de establecimiento de DIR en ticks, redondeado hacia arriba.
     /// Devuelve [`PlannerError::NumericalFailure`] si el resultado no cabe en `u64`.
     pub fn min_dir_setup_ticks(&self, timebase: StepTimeBase) -> Result<u64, PlannerError> {

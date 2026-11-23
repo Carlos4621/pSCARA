@@ -92,6 +92,62 @@ fn minimum_step_interval_checks_the_u64_limit_after_rounding() {
 }
 
 #[test]
+fn discrete_step_interval_rounds_high_and_low_separately() {
+    for (high_ns, low_ns, frequency, high_ticks, low_ticks, discrete_ticks, combined_ticks) in [
+        (2_000, 2_000, 1_000_000, 2, 2, 4, 4),
+        (1_100, 1_100, 1_000_000, 2, 2, 4, 3),
+        (100, 200, 1_000_000, 1, 1, 2, 1),
+        (1_000, 2_000, 1_000_000, 1, 2, 3, 3),
+        (1, 1, 1, 1, 1, 2, 1),
+    ] {
+        let timing = StepDirTiming::new(high_ns, low_ns, 1, 1).unwrap();
+        let timebase = StepTimeBase::new(frequency).unwrap();
+
+        assert_eq!(timing.min_step_high_ticks(timebase), Ok(high_ticks));
+        assert_eq!(timing.min_step_low_ticks(timebase), Ok(low_ticks));
+        assert_eq!(
+            timing.min_discrete_step_interval_ticks(timebase),
+            Ok(discrete_ticks)
+        );
+        assert_eq!(timing.min_step_interval_ticks(timebase), Ok(combined_ticks));
+    }
+}
+
+#[test]
+fn discrete_step_interval_propagates_high_and_low_conversion_overflows() {
+    let timebase = StepTimeBase::new(2_000_000_000).unwrap();
+    let overflow = Err(PlannerError::NumericalFailure);
+    for (high_ns, low_ns, expected_high, expected_low) in [
+        (u64::MAX, 1, overflow, Ok(2)),
+        (1, u64::MAX, Ok(2), overflow),
+    ] {
+        let timing = StepDirTiming::new(high_ns, low_ns, 1, 1).unwrap();
+
+        assert_eq!(timing.min_step_high_ticks(timebase), expected_high);
+        assert_eq!(timing.min_step_low_ticks(timebase), expected_low);
+        assert_eq!(timing.min_discrete_step_interval_ticks(timebase), overflow);
+    }
+}
+
+#[test]
+fn discrete_step_interval_checks_the_sum_of_representable_durations() {
+    let max = u64::MAX;
+    let timebase = StepTimeBase::new(500_000_000).unwrap();
+
+    for (low_ns, low_ticks, expected) in [
+        (max - 1, max / 2, Ok(max)),
+        (max, max / 2 + 1, Err(PlannerError::NumericalFailure)),
+    ] {
+        let timing = StepDirTiming::new(max, low_ns, 1, 1).unwrap();
+
+        assert_eq!(timing.min_step_high_ticks(timebase), Ok(max / 2 + 1));
+        assert_eq!(timing.min_step_low_ticks(timebase), Ok(low_ticks));
+        assert_eq!(timing.min_discrete_step_interval_ticks(timebase), expected);
+        assert_eq!(timing.min_step_interval_ticks(timebase), Ok(max));
+    }
+}
+
+#[test]
 fn dir_setup_and_hold_times_round_up_to_whole_ticks() {
     for (nanoseconds, frequency, expected_ticks) in [
         (200, 1_000_000, 1),

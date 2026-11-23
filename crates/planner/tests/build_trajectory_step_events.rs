@@ -284,7 +284,7 @@ fn an_insufficient_boundary_buffer_is_untouched_and_can_be_retried() {
     let points = points([[0.0, 0.0], [0.25, 0.0], [0.5, 0.0]]);
     let limits = limits();
     let timed = timed_path(&points, &[0.0; 3], &limits);
-    let base = StepTimeBase::new(1).unwrap();
+    let base = StepTimeBase::new(4).unwrap();
     let mut boundaries = [19, 23, 29];
 
     for capacity in 0..boundaries.len() {
@@ -307,12 +307,12 @@ fn an_insufficient_boundary_buffer_is_untouched_and_can_be_retried() {
     .unwrap()
     .collect::<Result<Vec<_>, _>>()
     .unwrap();
-    assert_eq!(boundaries, [0, 1, 2]);
+    assert_eq!(boundaries, [0, 4, 8]);
     assert_eq!(
         events,
         [
-            (1, MotorStepMove::new(steps(0, 0), steps(1, 0))),
-            (2, MotorStepMove::new(steps(1, 0), steps(2, 0))),
+            (2, MotorStepMove::new(steps(0, 0), steps(1, 0))),
+            (6, MotorStepMove::new(steps(1, 0), steps(2, 0))),
         ]
     );
 }
@@ -331,7 +331,7 @@ fn invalid_tick_boundaries_and_tick_overflow_are_construction_errors() {
 
         let result = build_trajectory_step_events(
             timed,
-            JointToStepsConverter::new(4.0, 4.0).unwrap(),
+            JointToStepsConverter::new(1.0, 1.0).unwrap(),
             StepTimeBase::new(frequency).unwrap(),
             &mut boundaries,
         );
@@ -356,7 +356,7 @@ fn a_started_or_exhausted_timed_path_has_no_profile_at_tick_zero() {
         assert_eq!(timed.next().unwrap().unwrap().end_time(), Ok(end_time));
         let result = build_trajectory_step_events(
             timed,
-            JointToStepsConverter::new(4.0, 4.0).unwrap(),
+            JointToStepsConverter::new(1.0, 1.0).unwrap(),
             base,
             &mut boundaries,
         );
@@ -368,7 +368,7 @@ fn a_started_or_exhausted_timed_path_has_no_profile_at_tick_zero() {
 #[test]
 fn an_unrepresentable_initial_motor_position_fails_before_writing_boundaries() {
     let limits = limits();
-    let base = StepTimeBase::new(1).unwrap();
+    let base = StepTimeBase::new(1_u64 << 63).unwrap();
     let overflowing_scale = i64::MAX as f64;
 
     for (coordinates, scales) in [
@@ -391,32 +391,37 @@ fn an_unrepresentable_initial_motor_position_fails_before_writing_boundaries() {
 
 #[test]
 fn motor_position_overflow_during_iteration_follows_the_valid_prefix() {
-    let points = points([[0.0, 0.0], [0.25, 0.0], [0.25, 0.25]]);
-    let limits = limits();
+    // Start the second motor at its last representable positive position.
+    let initial_second = 1.0_f64.next_down();
+    let points = points([[0.0, initial_second], [0.25, initial_second], [0.25, 1.0]]);
+    let (velocity, _) = limits();
+    let acceleration = JointAccelerationLimits::new(1.0, 1.0 - initial_second).unwrap();
+    let limits = (velocity, acceleration);
     let timed = timed_path(&points, &[0.0; 3], &limits);
+    let timebase = StepTimeBase::new(2048).unwrap();
     let mut boundaries = [19, 23, 29];
     {
         let mut events = build_trajectory_step_events(
             timed,
-            JointToStepsConverter::new(4.0, 4.0 * i64::MAX as f64).unwrap(),
-            StepTimeBase::new(1).unwrap(),
+            JointToStepsConverter::new(4.0, i64::MAX as f64).unwrap(),
+            timebase,
             &mut boundaries,
         )
         .unwrap();
 
         assert_eq!(
             events.next(),
-            Some(Ok((1, MotorStepMove::new(steps(0, 0), steps(1, 0)))))
+            Some(Ok((1024, MotorStepMove::new(steps(0, 0), steps(1, 0)))))
         );
         assert_eq!(events.next(), Some(Err(PlannerError::NumericalFailure)));
         assert_eq!(events.next(), None);
         assert_eq!(events.next(), None);
     }
-    assert_eq!(boundaries, [0, 1, 2]);
+    assert_eq!(boundaries, [0, 2048, 6144]);
 }
 
 #[test]
-fn more_than_one_step_on_either_motor_is_reported_during_iteration() {
+fn more_than_one_step_on_either_motor_is_rejected_before_iteration() {
     let points = points([[0.0, 0.0], [0.25, -0.25]]);
     let limits = limits();
     let timed = timed_path(&points, &[0.0; 2], &limits);
@@ -424,19 +429,51 @@ fn more_than_one_step_on_either_motor_is_reported_during_iteration() {
 
     for (first, second) in [(8.0, 4.0), (4.0, 8.0)] {
         let mut boundaries = [19, 23];
-        {
-            let mut events = build_trajectory_step_events(
-                timed,
-                JointToStepsConverter::new(first, second).unwrap(),
-                base,
-                &mut boundaries,
-            )
-            .unwrap();
-
-            assert_eq!(events.next(), Some(Err(PlannerError::MultipleStepsOnTick)));
-            assert_eq!(events.next(), None);
-            assert_eq!(events.next(), None);
-        }
-        assert_eq!(boundaries, [0, 1]);
+        let result = build_trajectory_step_events(
+            timed,
+            JointToStepsConverter::new(first, second).unwrap(),
+            base,
+            &mut boundaries,
+        );
+        assert_eq!(result.err(), Some(PlannerError::InsufficientTicksForSteps));
+        assert_eq!(boundaries, [19, 23]);
     }
+}
+
+#[test]
+fn an_insufficient_clock_leaves_the_buffer_intact_for_a_successful_retry()
+-> Result<(), PlannerError> {
+    let points = points([[0.0, 0.0], [0.25, -0.25]]);
+    let limits = limits();
+    let timed = timed_path(&points, &[0.0; 2], &limits);
+    let mut boundaries = [19, 23];
+
+    for clock in [1, 4] {
+        let result = build_trajectory_step_events(
+            timed,
+            JointToStepsConverter::new(8.0, 4.0)?,
+            StepTimeBase::new(clock)?,
+            &mut boundaries,
+        );
+        assert_eq!(result.err(), Some(PlannerError::InsufficientTicksForSteps));
+        assert_eq!(boundaries, [19, 23]);
+    }
+
+    let events = build_trajectory_step_events(
+        timed,
+        JointToStepsConverter::new(8.0, 4.0)?,
+        StepTimeBase::new(8)?,
+        &mut boundaries,
+    )?
+    .collect::<Result<Vec<_>, _>>()?;
+    assert_eq!(boundaries, [0, 8]);
+    assert_eq!(
+        events,
+        [
+            (3, MotorStepMove::new(steps(0, 0), steps(1, 0))),
+            (4, MotorStepMove::new(steps(1, 0), steps(1, -1))),
+            (6, MotorStepMove::new(steps(1, -1), steps(2, -1))),
+        ]
+    );
+    Ok(())
 }

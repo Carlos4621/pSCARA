@@ -11,6 +11,7 @@ pub fn build_trajectory_step_events<'a>(
     let trajectory = CoordinatedJointTrajectory::new(profiles)?;
 
     validate_subtick_boundaries(profiles, &trajectory, &converter, timebase)?;
+    validate_step_frequencies(profiles, &converter, timebase)?;
 
     let position_at_tick = move |tick: u64| -> Result<MotorSteps, PlannerError> {
         let time = timebase.ticks_to_seconds(tick);
@@ -31,10 +32,6 @@ pub fn build_trajectory_step_events<'a>(
     )
 }
 
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "Pendiente de integrar con el constructor público")
-)]
 fn validate_step_frequencies(
     profiles: TimedCoordinatedJointPathProfiles<'_>,
     converter: &JointToStepsConverter,

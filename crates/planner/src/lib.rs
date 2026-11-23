@@ -67,6 +67,9 @@ pub use motor_step_move::{AxisStepMove, MotorStepMove, StepDirection};
 mod step_dir_event;
 pub use step_dir_event::{StepDirEvent, into_step_dir_events};
 
+mod step_dir_pin_command;
+pub use step_dir_pin_command::{StepDirPinCommand, StepDirState};
+
 mod coordinated_step_interpolator;
 pub use coordinated_step_interpolator::{CoordinatedStepInterpolator, StepEvent};
 

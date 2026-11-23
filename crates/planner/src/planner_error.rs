@@ -44,6 +44,8 @@ pub enum PlannerError {
     MultipleStepsOnTick,
     BoundariesWithoutFrontiers,
     InsufficientBoundaryBuffer,
+    /// Un motor recorre más de un micropaso al pasar por una frontera entre ticks.
+    SubtickMotionNotRepresentable,
 }
 
 impl PlannerError {

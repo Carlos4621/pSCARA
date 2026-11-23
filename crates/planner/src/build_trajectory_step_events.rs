@@ -28,3 +28,27 @@ pub fn build_trajectory_step_events<'a>(
         position_at_tick,
     )
 }
+
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "Se usará al validar fronteras entre ticks")
+)]
+fn validate_subtick_excursion(
+    before: MotorSteps,
+    at_boundary: MotorSteps,
+    after: MotorSteps,
+) -> Result<(), PlannerError> {
+    let first_travel = u128::from(before.first.abs_diff(at_boundary.first))
+        + u128::from(at_boundary.first.abs_diff(after.first));
+    let second_travel = u128::from(before.second.abs_diff(at_boundary.second))
+        + u128::from(at_boundary.second.abs_diff(after.second));
+
+    if first_travel > 1 || second_travel > 1 {
+        return Err(PlannerError::SubtickMotionNotRepresentable);
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+#[path = "../tests/unit/build_trajectory_step_events.rs"]
+mod tests;

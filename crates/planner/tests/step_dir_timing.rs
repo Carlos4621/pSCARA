@@ -90,3 +90,46 @@ fn minimum_step_interval_checks_the_u64_limit_after_rounding() {
         );
     }
 }
+
+#[test]
+fn dir_setup_and_hold_times_round_up_to_whole_ticks() {
+    for (nanoseconds, frequency, expected_ticks) in [
+        (200, 1_000_000, 1),
+        (1_000, 1_000_000, 1),
+        (1_500, 1_000_000, 2),
+        (200, 10_000_000, 2),
+        (1, 1, 1),
+    ] {
+        let timing = StepDirTiming::new(2_000, 2_000, nanoseconds, nanoseconds).unwrap();
+        let timebase = StepTimeBase::new(frequency).unwrap();
+
+        assert_eq!(timing.min_dir_setup_ticks(timebase), Ok(expected_ticks));
+        assert_eq!(timing.min_dir_hold_ticks(timebase), Ok(expected_ticks));
+    }
+}
+
+#[test]
+fn dir_setup_and_hold_use_their_own_durations() {
+    let timing = StepDirTiming::new(2_000, 2_000, 1_500, 800).unwrap();
+    let timebase = StepTimeBase::new(1_000_000).unwrap();
+
+    assert_eq!(timing.min_dir_setup_ticks(timebase), Ok(2));
+    assert_eq!(timing.min_dir_hold_ticks(timebase), Ok(1));
+}
+
+#[test]
+fn dir_setup_and_hold_detect_results_above_u64_max() {
+    let max = u64::MAX;
+    let overflow = Err(PlannerError::NumericalFailure);
+    for (setup, hold, frequency, expected_setup, expected_hold) in [
+        (max - 1, max, 1_000_000_000, Ok(max - 1), Ok(max)),
+        (1_000_000_000, 1_000_000_001, max, Ok(max), overflow),
+        (max, max, max, overflow, overflow),
+    ] {
+        let timing = StepDirTiming::new(2_000, 2_000, setup, hold).unwrap();
+        let timebase = StepTimeBase::new(frequency).unwrap();
+
+        assert_eq!(timing.min_dir_setup_ticks(timebase), expected_setup);
+        assert_eq!(timing.min_dir_hold_ticks(timebase), expected_hold);
+    }
+}

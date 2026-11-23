@@ -66,4 +66,22 @@ impl StepDirTiming {
 
         u64::try_from(whole_ticks + remaining_ticks).map_err(|_| PlannerError::NumericalFailure)
     }
+
+    /// Tiempo mínimo de establecimiento de DIR en ticks, redondeado hacia arriba.
+    /// Devuelve [`PlannerError::NumericalFailure`] si el resultado no cabe en `u64`.
+    pub fn min_dir_setup_ticks(&self, timebase: StepTimeBase) -> Result<u64, PlannerError> {
+        nanoseconds_to_ticks(self.dir_setup_ns, timebase)
+    }
+
+    /// Tiempo mínimo de mantenimiento de DIR en ticks, redondeado hacia arriba.
+    /// Devuelve [`PlannerError::NumericalFailure`] si el resultado no cabe en `u64`.
+    pub fn min_dir_hold_ticks(&self, timebase: StepTimeBase) -> Result<u64, PlannerError> {
+        nanoseconds_to_ticks(self.dir_hold_ns, timebase)
+    }
+}
+
+fn nanoseconds_to_ticks(nanoseconds: u64, timebase: StepTimeBase) -> Result<u64, PlannerError> {
+    let numerator = u128::from(nanoseconds) * u128::from(timebase.ticks_per_second());
+    let ticks = numerator.div_ceil(NANOS_PER_SECOND);
+    u64::try_from(ticks).map_err(|_| PlannerError::NumericalFailure)
 }

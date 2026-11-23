@@ -101,6 +101,43 @@ fn one_segment_accepts_signed_zero_and_both_endpoints() {
 }
 
 #[test]
+fn clamped_position_uses_the_final_position_for_later_times() {
+    let points = [[0.0, 0.0], [9.0 / 16.0, 0.0]].map(angles);
+    let velocity = JointVelocityLimits::new(10.0, 10.0).unwrap();
+    let acceleration = JointAccelerationLimits::new(1.0, 1.0).unwrap();
+    let timed = timed_path(&points, &[0.0; 2], &velocity, &acceleration);
+    let trajectory = CoordinatedJointTrajectory::new(timed).unwrap();
+    let clamped_position = |time| {
+        trajectory
+            .position_at_clamped(time)
+            .map(|q| [q.first_theta(), q.second_theta()])
+    };
+
+    let end = 1.5_f64;
+    let final_position = position(&trajectory, end).unwrap();
+    assert_eq!(final_position, [9.0 / 16.0, 0.0]);
+    assert_eq!(clamped_position(0.0), Ok([0.0, 0.0]));
+    assert_eq!(clamped_position(1.0), Ok([7.0 / 16.0, 0.0]));
+    for time in [-0.0, f64::from_bits(1), 0.75, 1.0, end.next_down(), end] {
+        assert_eq!(clamped_position(time), position(&trajectory, time));
+    }
+    for time in [end.next_up(), 2.0, 100.0, f64::MAX] {
+        assert_eq!(position(&trajectory, time), Err(PlannerError::InvalidTime));
+        assert_eq!(clamped_position(time), Ok(final_position));
+    }
+    for time in [
+        -f64::from_bits(1),
+        -1.0,
+        f64::NAN,
+        -f64::NAN,
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+    ] {
+        assert_eq!(clamped_position(time), Err(PlannerError::InvalidTime));
+    }
+}
+
+#[test]
 fn repeated_queries_can_move_across_the_path_in_either_direction() {
     let points = [[0.0, 0.0], [4.0, -2.0], [4.0, -14.0], [-5.0, -14.0]].map(angles);
     let velocity = JointVelocityLimits::new(4.0, 2.0).unwrap();

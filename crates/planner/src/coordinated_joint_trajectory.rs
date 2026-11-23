@@ -30,6 +30,12 @@ impl<'a> CoordinatedJointTrajectory<'a> {
         self.find_profile(global_time)?.position_at(global_time)
     }
 
+    /// Devuelve la posición final para tiempos finitos posteriores al final.
+    pub fn position_at_clamped(&self, global_time: f64) -> Result<JointAngles, PlannerError> {
+        utilities::validate_finite_positive(global_time).map_err(|_| PlannerError::InvalidTime)?;
+        self.position_at(global_time.min(self.end_time))
+    }
+
     pub fn acceleration_at(&self, global_time: f64) -> Result<(f64, f64), PlannerError> {
         self.find_profile(global_time)?.acceleration_at(global_time)
     }

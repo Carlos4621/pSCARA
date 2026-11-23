@@ -73,6 +73,9 @@ pub use step_dir_pin_command::{StepDirPinCommand, StepDirState};
 mod step_dir_timing;
 pub use step_dir_timing::StepDirTiming;
 
+mod step_dir_interval_validator;
+pub use step_dir_interval_validator::validate_step_dir_intervals;
+
 mod coordinated_step_interpolator;
 pub use coordinated_step_interpolator::{CoordinatedStepInterpolator, StepEvent};
 

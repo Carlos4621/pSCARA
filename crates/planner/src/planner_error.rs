@@ -48,6 +48,8 @@ pub enum PlannerError {
     SubtickMotionNotRepresentable,
     /// Al menos un requisito temporal de STEP/DIR es cero.
     InvalidStepDirTiming,
+    /// Dos flancos STEP consecutivos no respetan el intervalo mínimo.
+    StepIntervalTooShort,
 }
 
 impl PlannerError {

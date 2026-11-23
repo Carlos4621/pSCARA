@@ -17,6 +17,19 @@ pub struct ScheduledStepDirEvent {
     pub second_step: bool,
 }
 
+impl ScheduledStepDirEvent {
+    pub(crate) fn step_low_tick(&self, step_high_ticks: u64) -> Result<Option<u64>, PlannerError> {
+        if self.first_step || self.second_step {
+            return self
+                .step_tick
+                .checked_add(step_high_ticks)
+                .map(Some)
+                .ok_or(PlannerError::NumericalFailure);
+        }
+        Ok(None)
+    }
+}
+
 /// Programa cada actualización de DIR de un comando en el último tick de su ventana válida.
 /// Conserva el tick y los pulsos STEP del comando generado por [`crate::StepDirState::prepare`].
 pub fn schedule_step_dir_command(

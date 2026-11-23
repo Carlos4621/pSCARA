@@ -13,6 +13,7 @@ pub struct StepDirScheduleCursor {
     timing: StepDirTiming,
     timebase: StepTimeBase,
     min_step_interval: u64,
+    step_high_ticks: u64,
 }
 
 impl StepDirScheduleCursor {
@@ -25,6 +26,7 @@ impl StepDirScheduleCursor {
         initial_second_direction: Option<StepDirection>,
     ) -> Result<Self, PlannerError> {
         let min_step_interval = timing.min_discrete_step_interval_ticks(timebase)?;
+        let step_high_ticks = timing.min_step_high_ticks(timebase)?;
 
         Ok(Self {
             state: StepDirState::new(initial_first_direction, initial_second_direction),
@@ -34,6 +36,7 @@ impl StepDirScheduleCursor {
             timing,
             timebase,
             min_step_interval,
+            step_high_ticks,
         })
     }
 
@@ -69,6 +72,7 @@ impl StepDirScheduleCursor {
             self.timing,
             self.timebase,
         )?;
+        scheduled.step_low_tick(self.step_high_ticks)?;
 
         self.state = next_state;
         if scheduled.first_step {

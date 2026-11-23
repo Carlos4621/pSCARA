@@ -93,6 +93,9 @@ pub use step_dir_schedule_cursor::StepDirScheduleCursor;
 mod step_dir_schedule_iterator;
 pub use step_dir_schedule_iterator::StepDirScheduleIterator;
 
+mod timed_pin_operation;
+pub use timed_pin_operation::{MotorAxis, PinOperation, TimedPinOperation, expand_step_dir_event};
+
 mod coordinated_step_interpolator;
 pub use coordinated_step_interpolator::{CoordinatedStepInterpolator, StepEvent};
 

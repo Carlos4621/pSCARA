@@ -177,6 +177,16 @@ fn propagates_an_error_from_the_source_iterator() {
 }
 
 #[test]
+fn rejects_a_pulse_whose_falling_edge_cannot_be_represented() {
+    let events = [Ok(event(u64::MAX, None, Some(Negative)))];
+
+    assert_eq!(
+        validate_schedule(events, None, Some(Negative)),
+        Err(PlannerError::NumericalFailure)
+    );
+}
+
+#[test]
 fn checks_that_the_discrete_step_interval_fits_before_reading_events() {
     let timing = StepDirTiming::new(u64::MAX, u64::MAX, 1, 1).unwrap();
     let timebase = StepTimeBase::new(500_000_000).unwrap();

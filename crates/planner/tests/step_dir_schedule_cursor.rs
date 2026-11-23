@@ -150,6 +150,55 @@ fn accepts_matching_initial_directions_on_both_motors_at_tick_zero() {
 }
 
 #[test]
+fn falling_edge_overflow_preserves_the_cursor_and_allows_an_earlier_retry() {
+    let timing = StepDirTiming::new(1_100, 1_000, 3_000, 2_000).unwrap();
+    let timebase = StepTimeBase::new(1_000_000).unwrap();
+    let mut cursor = StepDirScheduleCursor::new(timing, timebase, None, None).unwrap();
+    let max = u64::MAX;
+    cursor
+        .schedule(event(max - 7, Some(Positive), Some(Negative)))
+        .unwrap();
+
+    for (first, second) in [
+        (Some(Negative), None),
+        (None, Some(Positive)),
+        (Some(Negative), Some(Positive)),
+    ] {
+        assert_eq!(
+            cursor.schedule(event(max - 1, first, second)),
+            Err(PlannerError::NumericalFailure)
+        );
+    }
+
+    assert_eq!(
+        cursor.schedule(event(max - 2, Some(Negative), Some(Positive))),
+        Ok(ScheduledStepDirEvent {
+            step_tick: max - 2,
+            first_dir_change: Some(ScheduledDirChange {
+                tick: max - 5,
+                direction: Negative
+            }),
+            second_dir_change: Some(ScheduledDirChange {
+                tick: max - 5,
+                direction: Positive
+            }),
+            first_step: true,
+            second_step: true,
+        })
+    );
+    assert_eq!(
+        cursor.schedule(event(max, None, None)),
+        Ok(ScheduledStepDirEvent {
+            step_tick: max,
+            first_dir_change: None,
+            second_dir_change: None,
+            first_step: false,
+            second_step: false,
+        })
+    );
+}
+
+#[test]
 fn rejects_an_unrepresentable_discrete_step_interval_when_constructing_the_cursor() {
     let timing = StepDirTiming::new(u64::MAX, u64::MAX, 1, 1).unwrap();
     let timebase = StepTimeBase::new(500_000_000).unwrap();

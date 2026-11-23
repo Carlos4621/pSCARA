@@ -42,6 +42,7 @@ pub enum PlannerError {
     EndBeforeStart,
     InsufficientTicksForSteps,
     MultipleStepsOnTick,
+    BoundariesWithoutFrontiers,
 }
 
 impl PlannerError {

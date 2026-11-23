@@ -3,8 +3,9 @@ use planner::{
     CoordinatedJointPathProfiles, CoordinatedJointTrajectory, JointAccelerationLimits,
     JointToStepsConverter, JointVelocityLimits, MotorStepMove, MotorSteps, PlannerError,
     StepDirEvent, StepDirTiming, StepDirection, StepTimeBase, TimedCoordinatedJointPathProfiles,
-    build_interval_verified_step_dir_events, build_trajectory_step_events,
-    build_verified_trajectory_step_events, into_step_dir_events, preflight_trajectory_step_events,
+    build_interval_verified_step_dir_events, build_schedule_verified_step_dir_events,
+    build_trajectory_step_events, build_verified_trajectory_step_events, into_step_dir_events,
+    preflight_trajectory_step_events,
 };
 
 fn steps(first: i64, second: i64) -> MotorSteps {
@@ -701,7 +702,7 @@ fn verified_trajectory_builders_stream_the_expected_step_dir_events() -> Result<
 }
 
 #[test]
-fn interval_verified_builder_rejects_close_steps_before_returning_an_iterator()
+fn step_dir_verified_builders_reject_close_steps_before_returning_an_iterator()
 -> Result<(), PlannerError> {
     let points = points([[0.0, 0.0], [0.25, -0.25]]);
     let limits = limits();
@@ -721,6 +722,17 @@ fn interval_verified_builder_rejects_close_steps_before_returning_an_iterator()
 
     assert_eq!(result.err(), Some(PlannerError::StepIntervalTooShort));
     assert_eq!(boundaries, [0, 8]);
+
+    let result = build_schedule_verified_step_dir_events(
+        timed,
+        converter,
+        timebase,
+        timing,
+        None,
+        None,
+        &mut boundaries,
+    );
+    assert_eq!(result.err(), Some(PlannerError::StepIntervalTooShort));
     Ok(())
 }
 
@@ -744,6 +756,165 @@ fn interval_verified_builder_emits_the_final_step_after_an_off_grid_end() -> Res
             converter,
             timebase,
             timing,
+            &mut boundaries,
+        )?;
+        assert_eq!(
+            events.next(),
+            Some(Ok(StepDirEvent {
+                tick: 2,
+                first_direction: Some(StepDirection::Positive),
+                second_direction: None,
+            }))
+        );
+        assert_eq!(events.next(), None);
+    }
+
+    assert_eq!(boundaries, [0, 2]);
+    Ok(())
+}
+
+#[test]
+fn schedule_verified_builder_emits_a_valid_reversal() -> Result<(), PlannerError> {
+    let points = points([[0.0, 0.0], [25.0 / 16.0, 0.0], [1.0, 0.0]]);
+    let limits = limits();
+    let timed = timed_path(&points, &[0.0; 3], &limits);
+    let converter = JointToStepsConverter::new(2.0, 2.0)?;
+    let timebase = StepTimeBase::new(3)?;
+    let timing = StepDirTiming::new(1, 1, 1, 1)?;
+    let mut boundaries = [u64::MAX; 4];
+
+    {
+        let mut events = build_schedule_verified_step_dir_events(
+            timed,
+            converter,
+            timebase,
+            timing,
+            Some(StepDirection::Positive),
+            None,
+            &mut boundaries,
+        )?;
+
+        for (tick, direction) in [
+            (3, StepDirection::Positive),
+            (4, StepDirection::Positive),
+            (6, StepDirection::Positive),
+            (10, StepDirection::Negative),
+        ] {
+            assert_eq!(
+                events.next(),
+                Some(Ok(StepDirEvent {
+                    tick,
+                    first_direction: Some(direction),
+                    second_direction: None,
+                }))
+            );
+        }
+        assert_eq!(events.next(), None);
+    }
+
+    assert_eq!(boundaries, [0, 7, 8, 12]);
+    Ok(())
+}
+
+#[test]
+fn schedule_verified_builder_rejects_an_impossible_reversal() -> Result<(), PlannerError> {
+    let points = points([[0.0, 0.0], [25.0 / 16.0, 0.0], [1.0, 0.0]]);
+    let limits = limits();
+    let timed = timed_path(&points, &[0.0; 3], &limits);
+    let converter = JointToStepsConverter::new(2.0, 2.0)?;
+    let timebase = StepTimeBase::new(3)?;
+    let timing = StepDirTiming::new(1, 1, 1_000_000_000, 500_000_000)?;
+    let mut boundaries = [u64::MAX; 4];
+
+    let result = build_schedule_verified_step_dir_events(
+        timed,
+        converter,
+        timebase,
+        timing,
+        Some(StepDirection::Positive),
+        None,
+        &mut boundaries,
+    );
+
+    assert_eq!(result.err(), Some(PlannerError::DirChangeNotSchedulable));
+    assert_eq!(boundaries, [0, 7, 8, 12]);
+    Ok(())
+}
+
+#[test]
+fn schedule_verified_builder_needs_known_directions_for_early_steps() -> Result<(), PlannerError> {
+    let points = points([[0.0, 0.0], [0.25, -0.25]]);
+    let limits = limits();
+    let timed = timed_path(&points, &[0.0; 2], &limits);
+    let converter = JointToStepsConverter::new(8.0, 4.0)?;
+    let timebase = StepTimeBase::new(8)?;
+    let timing = StepDirTiming::new(1, 1, 625_000_000, 1)?;
+    let mut boundaries = [u64::MAX; 2];
+    let first_direction = Some(StepDirection::Positive);
+    let second_direction = Some(StepDirection::Negative);
+
+    for (first, second) in [(None, second_direction), (first_direction, None)] {
+        let result = build_schedule_verified_step_dir_events(
+            timed,
+            converter,
+            timebase,
+            timing,
+            first,
+            second,
+            &mut boundaries,
+        );
+        assert_eq!(result.err(), Some(PlannerError::DirChangeNotSchedulable));
+    }
+
+    let mut events = build_schedule_verified_step_dir_events(
+        timed,
+        converter,
+        timebase,
+        timing,
+        first_direction,
+        second_direction,
+        &mut boundaries,
+    )?;
+    for (tick, first_direction, second_direction) in [
+        (3, first_direction, None),
+        (4, None, second_direction),
+        (6, first_direction, None),
+    ] {
+        assert_eq!(
+            events.next(),
+            Some(Ok(StepDirEvent {
+                tick,
+                first_direction,
+                second_direction,
+            }))
+        );
+    }
+    assert_eq!(events.next(), None);
+    Ok(())
+}
+
+#[test]
+fn schedule_verified_builder_emits_the_last_step_after_an_off_grid_end() -> Result<(), PlannerError>
+{
+    let points = points([[0.0, 0.0], [9.0 / 16.0, 0.0]]);
+    let limits = limits();
+    let timed = timed_path(&points, &[0.0; 2], &limits);
+    let converter = JointToStepsConverter::new(1.0, 1.0)?;
+    let timebase = StepTimeBase::new(1)?;
+    let timing = StepDirTiming::new(1, 1, 1, 1)?;
+    let mut boundaries = [u64::MAX; 2];
+    let mut profiles = timed;
+    let profile = profiles.next().expect("one profile")?;
+    assert_eq!(profile.end_time()?, 1.5);
+
+    {
+        let mut events = build_schedule_verified_step_dir_events(
+            timed,
+            converter,
+            timebase,
+            timing,
+            None,
+            None,
             &mut boundaries,
         )?;
         assert_eq!(

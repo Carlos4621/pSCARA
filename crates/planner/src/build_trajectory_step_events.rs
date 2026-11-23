@@ -1,8 +1,8 @@
 use crate::{
     CoordinatedJointTrajectory, JointToStepsConverter, MotorSteps, PlannerError,
-    SegmentedTrajectoryStepEventIterator, StepDirEvent, StepDirTiming, StepTimeBase,
+    SegmentedTrajectoryStepEventIterator, StepDirEvent, StepDirTiming, StepDirection, StepTimeBase,
     TimedCoordinatedJointPathProfiles, build_segmented_step_events, into_step_dir_events,
-    validate_step_dir_intervals,
+    validate_step_dir_intervals, validate_step_dir_schedule,
 };
 
 pub fn build_trajectory_step_events<'a>(
@@ -87,6 +87,35 @@ pub fn build_interval_verified_step_dir_events<'a>(
         let events =
             build_trajectory_step_events(profiles, converter, timebase, boundaries_buffer)?;
         validate_step_dir_intervals(into_step_dir_events(events), timing, timebase)?;
+    }
+
+    let events = build_trajectory_step_events(profiles, converter, timebase, boundaries_buffer)?;
+    Ok(into_step_dir_events(events))
+}
+
+/// Verifica los eventos, los intervalos STEP y las ventanas de cambio de DIR.
+/// Devuelve un iterador nuevo para la ejecución si toda la secuencia es válida.
+/// Las direcciones iniciales conocidas se consideran estables desde el tick cero.
+/// Si la verificación falla, el búfer puede contener las fronteras generadas.
+pub fn build_schedule_verified_step_dir_events<'a>(
+    profiles: TimedCoordinatedJointPathProfiles<'a>,
+    converter: JointToStepsConverter,
+    timebase: StepTimeBase,
+    timing: StepDirTiming,
+    initial_first_direction: Option<StepDirection>,
+    initial_second_direction: Option<StepDirection>,
+    boundaries_buffer: &'a mut [u64],
+) -> Result<impl Iterator<Item = Result<StepDirEvent, PlannerError>> + 'a, PlannerError> {
+    {
+        let events =
+            build_trajectory_step_events(profiles, converter, timebase, boundaries_buffer)?;
+        validate_step_dir_schedule(
+            into_step_dir_events(events),
+            timing,
+            timebase,
+            initial_first_direction,
+            initial_second_direction,
+        )?;
     }
 
     let events = build_trajectory_step_events(profiles, converter, timebase, boundaries_buffer)?;

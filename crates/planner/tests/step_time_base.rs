@@ -301,6 +301,127 @@ fn rounding_near_the_u64_limit_checks_the_final_integer() {
 }
 
 #[test]
+fn bracketing_distinguishes_signed_zero_from_positive_subnormal_times() {
+    for frequency in [1, 1_000, u64::MAX] {
+        let base = StepTimeBase::new(frequency).unwrap();
+        for zero in [0.0, -0.0] {
+            assert_eq!(base.bracketing_ticks(zero), Ok((0, 0)));
+        }
+        for seconds in [SMALLEST, f64::MIN_POSITIVE.next_down(), f64::MIN_POSITIVE] {
+            assert_eq!(base.bracketing_ticks(seconds), Ok((0, 1)));
+        }
+    }
+}
+
+#[test]
+fn bracketing_rejects_negative_and_nonfinite_times() {
+    for frequency in [1, 1_000, u64::MAX] {
+        let base = StepTimeBase::new(frequency).unwrap();
+        for seconds in [
+            -SMALLEST,
+            -1.0,
+            -f64::MAX,
+            f64::NAN,
+            -f64::NAN,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+        ] {
+            assert_eq!(
+                base.bracketing_ticks(seconds),
+                Err(PlannerError::InvalidTime)
+            );
+        }
+    }
+}
+
+#[test]
+fn bracketing_matches_represented_tick_times_and_bounds_adjacent_floats() {
+    for frequency in [3, 7, 8, 48_000, u64::MAX] {
+        let base = StepTimeBase::new(frequency).unwrap();
+        for tick in [1, 2, 63, 2048] {
+            let seconds = base.ticks_to_seconds(tick);
+            assert_eq!(base.bracketing_ticks(seconds), Ok((tick, tick)));
+            assert_eq!(
+                base.bracketing_ticks(seconds.next_down()),
+                Ok((tick - 1, tick))
+            );
+            assert_eq!(
+                base.bracketing_ticks(seconds.next_up()),
+                Ok((tick, tick + 1))
+            );
+        }
+    }
+}
+
+#[test]
+fn half_ticks_and_their_adjacent_times_share_the_same_bracket() {
+    let base = StepTimeBase::new(8).unwrap();
+    for (halfway, lower) in [(0.0625_f64, 0), (0.1875, 1), (0.9375, 7), (63.9375, 511)] {
+        for seconds in [halfway.next_down(), halfway, halfway.next_up()] {
+            assert_eq!(base.bracketing_ticks(seconds), Ok((lower, lower + 1)));
+        }
+    }
+}
+
+#[test]
+fn bracketing_matches_integer_floor_and_ceiling_on_a_binary_fraction_grid() {
+    const DENOMINATOR: u64 = 1024;
+    for frequency in [1, 3, 7, 8, 64, 1_000, 48_000] {
+        let base = StepTimeBase::new(frequency).unwrap();
+        for numerator in 0..=2048_u32 {
+            let seconds = f64::from(numerator) / DENOMINATOR as f64;
+            let product = frequency * u64::from(numerator);
+            let lower = product / DENOMINATOR;
+            let upper = product.div_ceil(DENOMINATOR);
+            assert_eq!(
+                base.bracketing_ticks(seconds),
+                Ok((lower, upper)),
+                "frequency={frequency}, numerator={numerator}"
+            );
+        }
+    }
+}
+
+#[test]
+fn bracketing_accepts_the_largest_ticks_and_rejects_times_beyond_the_clock() {
+    let base = StepTimeBase::new(u64::MAX).unwrap();
+    assert_eq!(base.bracketing_ticks(1.0), Ok((u64::MAX, u64::MAX)));
+    assert_eq!(
+        base.bracketing_ticks(1.0_f64.next_up()),
+        Err(PlannerError::NumericalFailure)
+    );
+
+    let base = StepTimeBase::new(1).unwrap();
+    let last_integer = u64::MAX - 2047;
+    assert_eq!(
+        base.bracketing_ticks(U64_EXCLUSIVE_UPPER_BOUND.next_down()),
+        Ok((last_integer, last_integer))
+    );
+    for seconds in [U64_EXCLUSIVE_UPPER_BOUND.next_up(), f64::MAX] {
+        assert_eq!(
+            base.bracketing_ticks(seconds),
+            Err(PlannerError::NumericalFailure)
+        );
+    }
+}
+
+#[test]
+fn bracketing_recognizes_an_upper_tick_that_rounds_to_the_requested_time() {
+    let frequency = 11 * (1_u64 << 52) + 3;
+    let base = StepTimeBase::new(frequency).unwrap();
+    let seconds = 0.125_f64;
+    let lower = frequency / 8;
+    let upper = lower + 1;
+
+    // The exact product is lower + 3/8. The upper tick is farther from the
+    // exact product, but rounds to seconds because the f64 spacing grows at 1/8.
+    assert_eq!(base.seconds_to_ticks(seconds), Ok(lower));
+    assert_eq!(base.ticks_to_seconds(lower), seconds.next_down());
+    assert_eq!(base.ticks_to_seconds(upper), seconds);
+    assert_eq!(base.bracketing_ticks(seconds), Ok((upper, upper)));
+}
+
+#[test]
 fn coordinated_profile_boundaries_quantize_to_shared_ticks() {
     let points = [0.0, 1.0, 5.0, 14.0].map(|first| JointAngles::new(first, 0.0).unwrap());
     let velocity = JointVelocityLimits::new(10.0, 10.0).unwrap();

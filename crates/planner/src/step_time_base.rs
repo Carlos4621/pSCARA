@@ -87,4 +87,37 @@ impl StepTimeBase {
 
         u64::try_from(rounded).map_err(|_| PlannerError::NumericalFailure)
     }
+
+    /// Devuelve los ticks que rodean un instante temporal.
+    ///
+    /// Si el instante coincide con un tick representable,
+    /// devuelve el mismo tick en ambas posiciones.
+    ///
+    /// Si está entre dos ticks, devuelve (anterior, siguiente).
+    pub fn bracketing_ticks(&self, seconds: f64) -> Result<(u64, u64), PlannerError> {
+        let nearest_tick = self.seconds_to_ticks(seconds)?;
+        let nearest_time = self.ticks_to_seconds(nearest_tick);
+
+        if nearest_time == seconds {
+            return Ok((nearest_tick, nearest_tick));
+        }
+
+        if nearest_time < seconds {
+            let next_tick = nearest_tick
+                .checked_add(1)
+                .ok_or(PlannerError::NumericalFailure)?;
+
+            if self.ticks_to_seconds(next_tick) == seconds {
+                return Ok((next_tick, next_tick));
+            }
+
+            Ok((nearest_tick, next_tick))
+        } else {
+            let previous_tick = nearest_tick
+                .checked_sub(1)
+                .ok_or(PlannerError::NumericalFailure)?;
+
+            Ok((previous_tick, nearest_tick))
+        }
+    }
 }

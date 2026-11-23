@@ -1,4 +1,9 @@
-use crate::{MotorSteps, PlannerError};
+use core::iter::FusedIterator;
+
+use crate::{
+    MotorStepMove, MotorSteps, PlannerError, TrajectoryStepEventIterator,
+    find_first_transition_tick,
+};
 
 #[derive(Debug)]
 pub struct SegmentedTrajectoryStepEventIterator<'a, F> {
@@ -35,6 +40,71 @@ impl<'a, F> SegmentedTrajectoryStepEventIterator<'a, F> {
             finished: false,
         })
     }
+}
+
+impl<'a, F> Iterator for SegmentedTrajectoryStepEventIterator<'a, F>
+where
+    F: FnMut(u64) -> Result<MotorSteps, PlannerError>,
+{
+    type Item = Result<(u64, MotorStepMove), PlannerError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            if self.segment_index >= self.boundaries.len() - 1 {
+                self.finished = true;
+            }
+
+            if self.finished {
+                return None;
+            }
+
+            let end_tick = self.boundaries[self.segment_index + 1];
+
+            if self.current_tick == end_tick {
+                self.segment_index += 1;
+                continue;
+            }
+
+            let result = find_first_transition_tick(
+                self.current_tick,
+                end_tick,
+                self.current_position,
+                &mut self.position_at_tick,
+            );
+
+            match result {
+                Ok(Some((tick, movement))) => {
+                    TrajectoryStepEventIterator::<F>::apply_axis_step(
+                        &mut self.current_position.first,
+                        movement.first(),
+                    );
+                    TrajectoryStepEventIterator::<F>::apply_axis_step(
+                        &mut self.current_position.second,
+                        movement.second(),
+                    );
+
+                    self.current_tick = tick;
+                    return Some(Ok((tick, movement)));
+                }
+
+                Ok(None) => {
+                    self.current_tick = end_tick;
+                    self.segment_index += 1;
+                    continue;
+                }
+
+                Err(error) => {
+                    self.finished = true;
+                    return Some(Err(error));
+                }
+            }
+        }
+    }
+}
+
+impl<'a, F> FusedIterator for SegmentedTrajectoryStepEventIterator<'_, F> where
+    F: FnMut(u64) -> Result<MotorSteps, PlannerError>
+{
 }
 
 #[cfg(test)]

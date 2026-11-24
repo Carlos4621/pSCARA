@@ -1,5 +1,6 @@
 use core::sync::atomic::{Ordering, compiler_fence};
 
+use executor::{ExecutorError, PioCommandBlock, PioCommandBlockReader, PioCommandWord};
 use rp235x_hal::{
     dma::{CH0, CH1, Channel, SingleChannel},
     pac::{self, PIO0},
@@ -11,7 +12,21 @@ use crate::dma_command_buffer::DmaCommandBuffer;
 type StepDirTx = Tx<(PIO0, SM0)>;
 const CHANNEL_MASK: u16 = 0b11;
 
-/// Transfiere dos bloques a una misma FIFO, con CH0 encadenado a CH1.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DmaSlot {
+    A,
+    B,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RefillError {
+    Source(ExecutorError),
+    MissingBlock,
+    DeadlineMissed,
+    DmaBusError,
+}
+
+/// Transfiere bloques a una misma FIFO reutilizando CH0 y CH1.
 #[must_use = "llama a stop para recuperar los canales, los búferes y la FIFO"]
 pub struct DmaPairTransfer {
     channel_a: Channel<CH0>,
@@ -19,6 +34,9 @@ pub struct DmaPairTransfer {
     buffer_a: DmaCommandBuffer,
     buffer_b: DmaCommandBuffer,
     tx: StepDirTx,
+    next_to_refill: DmaSlot,
+    final_queued: bool,
+    blocks_queued: usize,
 }
 
 #[must_use]
@@ -42,8 +60,13 @@ impl DmaPairTransfer {
     ) -> Self {
         assert!(!buffer_a.is_empty());
         assert!(!buffer_b.is_empty());
-        assert!(!channel_a.ch().ch_ctrl_trig().read().busy().bit_is_set());
-        assert!(!channel_b.ch().ch_ctrl_trig().read().busy().bit_is_set());
+        assert!(!channel_busy(&channel_a));
+        assert!(!channel_busy(&channel_b));
+        let end = PioCommandWord::END.bits();
+        assert!(!buffer_a.as_slice().contains(&end));
+        let final_queued = buffer_b.as_slice().last() == Some(&end);
+        clear_channel_completion(channel_a.id());
+        clear_channel_completion(channel_b.id());
 
         // Elegir el propio canal en CHAIN_TO deshabilita el encadenamiento.
         let last_channel = channel_b.id();
@@ -66,25 +89,18 @@ impl DmaPairTransfer {
             buffer_a,
             buffer_b,
             tx,
+            next_to_refill: DmaSlot::A,
+            final_queued,
+            blocks_queued: 2,
         }
     }
 
     pub fn channel_a_busy(&self) -> bool {
-        self.channel_a
-            .ch()
-            .ch_ctrl_trig()
-            .read()
-            .busy()
-            .bit_is_set()
+        channel_busy(&self.channel_a)
     }
 
     pub fn channel_b_busy(&self) -> bool {
-        self.channel_b
-            .ch()
-            .ch_ctrl_trig()
-            .read()
-            .busy()
-            .bit_is_set()
+        channel_busy(&self.channel_b)
     }
 
     pub fn remaining_words(&self) -> [u32; 2] {
@@ -110,12 +126,65 @@ impl DmaPairTransfer {
                 .bit_is_set()
     }
 
-    /// Indica que los dos bloques se transfirieron a la FIFO.
+    pub fn blocks_queued(&self) -> usize {
+        self.blocks_queued
+    }
+
+    pub fn final_queued(&self) -> bool {
+        self.final_queued
+    }
+
+    /// Indica que el bloque final y su antecesor ya se transfirieron a la FIFO.
     pub fn is_done(&self) -> bool {
-        self.remaining_words() == [0, 0]
+        self.final_queued
+            && channel_completed(self.channel_a.id())
+            && channel_completed(self.channel_b.id())
             && !self.channel_a_busy()
             && !self.channel_b_busy()
             && !self.has_bus_error()
+    }
+
+    /// Publica el siguiente bloque cuando DMA libera su búfer.
+    /// Ante un error, detener la ejecución y recuperar los recursos con `stop`.
+    pub fn refill_next<I>(
+        &mut self,
+        reader: &mut PioCommandBlockReader<I>,
+    ) -> Result<Option<PioCommandBlock>, RefillError>
+    where
+        I: Iterator<Item = Result<PioCommandWord, ExecutorError>>,
+    {
+        if self.has_bus_error() {
+            return Err(RefillError::DmaBusError);
+        }
+        if self.final_queued {
+            return Ok(None);
+        }
+
+        let block = match self.next_to_refill {
+            DmaSlot::A => refill_channel(
+                &self.channel_a,
+                &self.channel_b,
+                &mut self.buffer_a,
+                &self.tx,
+                reader,
+            )?,
+            DmaSlot::B => refill_channel(
+                &self.channel_b,
+                &self.channel_a,
+                &mut self.buffer_b,
+                &self.tx,
+                reader,
+            )?,
+        };
+        if let Some(block) = block {
+            self.blocks_queued += 1;
+            self.final_queued = block.is_final;
+            self.next_to_refill = match self.next_to_refill {
+                DmaSlot::A => DmaSlot::B,
+                DmaSlot::B => DmaSlot::A,
+            };
+        }
+        Ok(block)
     }
 
     /// Recupera los recursos cuando ambos canales se han detenido.
@@ -160,6 +229,78 @@ impl DmaPairTransfer {
     }
 }
 
+fn channel_completed(id: u8) -> bool {
+    // SAFETY: leer INTR no modifica los indicadores DMA.
+    let dma = unsafe { &*pac::DMA::ptr() };
+    dma.intr().read().bits() & (1u32 << id) != 0
+}
+
+fn clear_channel_completion(id: u8) {
+    // SAFETY: solo se reconoce el indicador del canal poseído por el par.
+    let dma = unsafe { &*pac::DMA::ptr() };
+    dma.intr().write(|w| unsafe { w.bits(1u32 << id) });
+}
+
+fn channel_busy<C: SingleChannel>(channel: &C) -> bool {
+    channel.ch().ch_ctrl_trig().read().busy().bit_is_set()
+}
+
+fn set_chain_to<C: SingleChannel>(channel: &C, next_channel: u8) {
+    // SAFETY: el índice corresponde al otro canal del par. AL1_CTRL no
+    // dispara DMA y modify conserva los indicadores W1C de error.
+    channel
+        .ch()
+        .ch_al1_ctrl()
+        .modify(|_, w| unsafe { w.chain_to().bits(next_channel) });
+}
+
+fn refill_channel<C, P, I>(
+    channel: &C,
+    previous: &P,
+    buffer: &mut DmaCommandBuffer,
+    tx: &StepDirTx,
+    reader: &mut PioCommandBlockReader<I>,
+) -> Result<Option<PioCommandBlock>, RefillError>
+where
+    C: SingleChannel,
+    P: SingleChannel,
+    I: Iterator<Item = Result<PioCommandWord, ExecutorError>>,
+{
+    if !channel_completed(channel.id()) || channel_busy(channel) {
+        return Ok(None);
+    }
+    if channel_completed(previous.id()) {
+        return Err(RefillError::DeadlineMissed);
+    }
+    if !channel_busy(previous) {
+        return Ok(None);
+    }
+
+    cortex_m::asm::dsb();
+    compiler_fence(Ordering::SeqCst);
+    let block = buffer
+        .fill_from(reader)
+        .map_err(RefillError::Source)?
+        .ok_or(RefillError::MissingBlock)?;
+
+    if channel_completed(previous.id()) {
+        return Err(RefillError::DeadlineMissed);
+    }
+    clear_channel_completion(channel.id());
+    configure_channel(channel, buffer, tx, channel.id());
+
+    compiler_fence(Ordering::SeqCst);
+    cortex_m::asm::dsb();
+    if channel_completed(previous.id()) {
+        return Err(RefillError::DeadlineMissed);
+    }
+
+    // El destino ya contiene el bloque nuevo y su encadenamiento está deshabilitado.
+    // Si se pierde el disparo por un relevo tardío, PIO lo detectará con TXSTALL.
+    set_chain_to(previous, channel.id());
+    Ok(Some(block))
+}
+
 fn configure_channel<C: SingleChannel>(
     channel: &C,
     buffer: &DmaCommandBuffer,
@@ -168,7 +309,7 @@ fn configure_channel<C: SingleChannel>(
 ) {
     let registers = channel.ch();
     // SAFETY: los valores son DMA de 32 bits, el DREQ de la FIFO propia
-    // y el índice de CH1. Los registros de esta configuración no disparan DMA.
+    // y un índice de canal del par. Esta configuración no dispara DMA.
     registers.ch_al1_ctrl().write(|w| unsafe {
         w.data_size()
             .bits(2)

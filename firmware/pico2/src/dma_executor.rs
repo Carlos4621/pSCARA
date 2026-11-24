@@ -10,6 +10,7 @@ use rp235x_hal::{
 };
 
 use crate::dma_command_buffer::DmaCommandBuffer;
+use crate::dma_pair::RefillError;
 
 pub(super) const IRQ_END: u8 = 1 << 0;
 pub(super) const IRQ_INVALID_COMMAND: u8 = 1 << 1;
@@ -33,6 +34,7 @@ pub enum PioExecutionError {
     DmaIncomplete,
     DmaBusError,
     Cancelled,
+    BlockRefill(RefillError),
 }
 
 pub struct DmaExecutor {

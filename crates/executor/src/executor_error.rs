@@ -13,6 +13,8 @@ pub enum ExecutorError {
     InvalidPioCommandWord,
     DelayTooShort,
     InvalidPioClockRatio,
+    CycleCountOverflow,
+    MissingEndCommand,
 }
 
 impl From<PlannerError> for ExecutorError {

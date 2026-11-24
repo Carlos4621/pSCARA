@@ -35,3 +35,6 @@ pub use pio_timing::{
 
 mod pio_frame_splitter;
 pub use pio_frame_splitter::PioFrameSplitter;
+
+mod pio_command_iterator;
+pub use pio_command_iterator::PioCommandIterator;

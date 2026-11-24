@@ -38,3 +38,9 @@ pub use pio_frame_splitter::PioFrameSplitter;
 
 mod pio_command_iterator;
 pub use pio_command_iterator::PioCommandIterator;
+
+mod pio_execution_config;
+pub use pio_execution_config::PioExecutionConfig;
+
+mod build_pio_commands;
+pub use build_pio_commands::{build_pio_commands, build_verified_pio_commands};

@@ -1,0 +1,325 @@
+use executor::{
+    ExecutorError, PIO_FRAME_OVERHEAD_CYCLES, PioCommandWord, PioExecutionConfig,
+    build_pio_commands, build_verified_pio_commands, pio_frame_cycles,
+};
+use kinematics::JointAngles;
+use planner::{
+    CoordinatedJointPathProfiles, JointAccelerationLimits, JointToStepsConverter,
+    JointVelocityLimits, PinOperationBatch, PlannerError, StepDirTiming,
+    StepDirection::{Negative, Positive},
+    StepTimeBase, TimedCoordinatedJointPathProfiles,
+};
+
+const TWO_MOTOR_PATH: [[f64; 2]; 2] = [[0.0, 0.0], [0.25, -0.25]];
+const TWO_MOTOR_MOVEMENT: [(u32, u64); 6] = [
+    (0xA000_0028, 20),
+    (0x3000_0008, 30),
+    (0x6000_0008, 40),
+    (0x2000_0008, 50),
+    (0x3000_0008, 60),
+    (0x2000_0008, 70),
+];
+
+fn points<const N: usize>(coordinates: [[f64; 2]; N]) -> [JointAngles; N] {
+    coordinates.map(|[first, second]| JointAngles::new(first, second).unwrap())
+}
+
+fn limits() -> (JointVelocityLimits, JointAccelerationLimits) {
+    (
+        JointVelocityLimits::new(10.0, 10.0).unwrap(),
+        JointAccelerationLimits::new(1.0, 1.0).unwrap(),
+    )
+}
+
+fn timed_path<'a>(
+    points: &'a [JointAngles],
+    speeds: &'a [f64],
+    (velocity, acceleration): &'a (JointVelocityLimits, JointAccelerationLimits),
+) -> TimedCoordinatedJointPathProfiles<'a> {
+    let path = CoordinatedJointPathProfiles::new(points, speeds, velocity, acceleration).unwrap();
+    TimedCoordinatedJointPathProfiles::new(path).unwrap()
+}
+
+fn two_motor_converter() -> JointToStepsConverter {
+    JointToStepsConverter::new(8.0, 4.0).unwrap()
+}
+
+fn two_motor_config() -> PioExecutionConfig {
+    PioExecutionConfig {
+        timebase: StepTimeBase::new(8).unwrap(),
+        timing: StepDirTiming::new(125_000_000, 125_000_000, 1, 1).unwrap(),
+        pio_frequency_hz: 80,
+        initial_first_direction: Negative,
+        initial_second_direction: Positive,
+        first_positive_is_high: true,
+        second_positive_is_high: true,
+    }
+}
+
+#[test]
+fn both_builders_preserve_the_exact_words_and_timing_of_the_two_motor_path()
+-> Result<(), ExecutorError> {
+    let points = points(TWO_MOTOR_PATH);
+    let limits = limits();
+    let profiles = timed_path(&points, &[0.0; 2], &limits);
+    let converter = two_motor_converter();
+    let config = two_motor_config();
+    let mut boundaries = [u64::MAX; 2];
+    let mut operations = [PinOperationBatch::new(u64::MAX); 4];
+
+    assert_eq!(config.initial_levels(), 0b1000);
+    let commands = build_pio_commands(
+        profiles,
+        converter,
+        config,
+        &mut boundaries,
+        &mut operations,
+    )?
+    .collect::<Result<Vec<_>, _>>()?;
+    let verified = build_verified_pio_commands(
+        profiles,
+        converter,
+        config,
+        &mut boundaries,
+        &mut operations,
+    )?
+    .collect::<Result<Vec<_>, _>>()?;
+
+    assert_eq!(commands, verified);
+    let (end, movement) = commands.split_last().unwrap();
+    assert_eq!(*end, PioCommandWord::END);
+    assert_eq!(end.bits(), 0x0000_0001);
+    assert_eq!(movement.len(), TWO_MOTOR_MOVEMENT.len());
+    let mut physical_cycles = 0;
+    for (command, (bits, logical_cycles)) in movement.iter().zip(TWO_MOTOR_MOVEMENT) {
+        assert_eq!(command.bits(), bits);
+        physical_cycles += pio_frame_cycles(command.wait_counter().unwrap())?;
+        assert_eq!(physical_cycles - PIO_FRAME_OVERHEAD_CYCLES, logical_cycles);
+    }
+    assert_eq!(boundaries, [0, 8]);
+    Ok(())
+}
+
+#[test]
+fn emits_only_end_for_a_trajectory_without_steps_and_accepts_an_empty_operations_buffer()
+-> Result<(), ExecutorError> {
+    let points = points(TWO_MOTOR_PATH);
+    let limits = limits();
+    let profiles = timed_path(&points, &[0.0; 2], &limits);
+    let converter = JointToStepsConverter::new(1.0, 1.0)?;
+    let mut boundaries = [0; 2];
+    let mut commands = build_verified_pio_commands(
+        profiles,
+        converter,
+        two_motor_config(),
+        &mut boundaries,
+        &mut [],
+    )?;
+
+    assert_eq!(commands.next(), Some(Ok(PioCommandWord::END)));
+    assert_eq!(commands.next(), None);
+    Ok(())
+}
+
+#[test]
+fn rejects_incompatible_pio_frequencies_during_construction() {
+    let points = points(TWO_MOTOR_PATH);
+    let limits = limits();
+    let profiles = timed_path(&points, &[0.0; 2], &limits);
+    let mut boundaries = [0; 2];
+    let mut operations = [PinOperationBatch::new(0); 4];
+
+    for pio_frequency_hz in [0, 40, 81] {
+        let config = PioExecutionConfig {
+            pio_frequency_hz,
+            ..two_motor_config()
+        };
+        let commands = build_pio_commands(
+            profiles,
+            two_motor_converter(),
+            config,
+            &mut boundaries,
+            &mut operations,
+        );
+        assert_eq!(commands.err(), Some(ExecutorError::InvalidPioClockRatio));
+    }
+}
+
+#[test]
+fn verifies_a_late_operations_buffer_overflow_before_returning_an_iterator()
+-> Result<(), ExecutorError> {
+    let points = points(TWO_MOTOR_PATH);
+    let limits = limits();
+    let profiles = timed_path(&points, &[0.0; 2], &limits);
+    let converter = two_motor_converter();
+    let config = two_motor_config();
+    let mut boundaries = [0; 2];
+    let mut operations = [PinOperationBatch::new(0); 3];
+    let error = ExecutorError::Planner(PlannerError::InsufficientPinOperationBuffer);
+
+    {
+        let mut commands = build_pio_commands(
+            profiles,
+            converter,
+            config,
+            &mut boundaries,
+            &mut operations,
+        )?;
+        for (bits, _) in TWO_MOTOR_MOVEMENT[..2].iter().copied() {
+            assert_eq!(commands.next(), Some(Ok(PioCommandWord::from_bits(bits)?)));
+        }
+        assert_eq!(commands.next(), Some(Err(error)));
+        assert_eq!(commands.next(), None);
+    }
+
+    let verified = build_verified_pio_commands(
+        profiles,
+        converter,
+        config,
+        &mut boundaries,
+        &mut operations,
+    );
+    assert_eq!(verified.err(), Some(error));
+    Ok(())
+}
+
+#[test]
+fn verifies_step_intervals_before_returning_an_iterator() -> Result<(), ExecutorError> {
+    let points = points(TWO_MOTOR_PATH);
+    let limits = limits();
+    let profiles = timed_path(&points, &[0.0; 2], &limits);
+    let config = PioExecutionConfig {
+        timing: StepDirTiming::new(250_000_000, 250_000_000, 1, 1)?,
+        ..two_motor_config()
+    };
+    let mut boundaries = [0; 2];
+    let mut operations = [PinOperationBatch::new(0); 8];
+
+    let verified = build_verified_pio_commands(
+        profiles,
+        two_motor_converter(),
+        config,
+        &mut boundaries,
+        &mut operations,
+    );
+    assert_eq!(
+        verified.err(),
+        Some(ExecutorError::Planner(PlannerError::StepIntervalTooShort))
+    );
+    Ok(())
+}
+
+#[test]
+fn verifies_an_unschedulable_direction_reversal_before_returning_an_iterator()
+-> Result<(), ExecutorError> {
+    let points = points([[0.0, 0.0], [25.0 / 16.0, 0.0], [1.0, 0.0]]);
+    let limits = limits();
+    let profiles = timed_path(&points, &[0.0; 3], &limits);
+    let converter = JointToStepsConverter::new(2.0, 2.0)?;
+    let config = PioExecutionConfig {
+        timebase: StepTimeBase::new(6)?,
+        timing: StepDirTiming::new(1, 1, 1_000_000_000, 600_000_000)?,
+        pio_frequency_hz: 60,
+        initial_first_direction: Positive,
+        ..two_motor_config()
+    };
+    let mut boundaries = [0; 3];
+    let mut operations = [PinOperationBatch::new(0); 8];
+
+    let verified = build_verified_pio_commands(
+        profiles,
+        converter,
+        config,
+        &mut boundaries,
+        &mut operations,
+    );
+    assert_eq!(
+        verified.err(),
+        Some(ExecutorError::Planner(
+            PlannerError::DirChangeNotSchedulable
+        ))
+    );
+    Ok(())
+}
+
+#[test]
+fn changes_only_the_corresponding_dir_bits_for_inverted_polarities() -> Result<(), ExecutorError> {
+    let points = points(TWO_MOTOR_PATH);
+    let limits = limits();
+    let profiles = timed_path(&points, &[0.0; 2], &limits);
+    let converter = two_motor_converter();
+    let mut boundaries = [0; 2];
+    let mut operations = [PinOperationBatch::new(0); 4];
+
+    for (first_positive_is_high, second_positive_is_high, initial_levels, dir_mask) in [
+        (false, true, 0b1010, 0x2000_0000),
+        (true, false, 0b0000, 0x8000_0000),
+        (false, false, 0b0010, 0xA000_0000),
+    ] {
+        let config = PioExecutionConfig {
+            first_positive_is_high,
+            second_positive_is_high,
+            ..two_motor_config()
+        };
+        assert_eq!(config.initial_levels(), initial_levels);
+        let mut commands = build_pio_commands(
+            profiles,
+            converter,
+            config,
+            &mut boundaries,
+            &mut operations,
+        )?;
+
+        for (bits, _) in TWO_MOTOR_MOVEMENT {
+            assert_eq!(
+                commands.next(),
+                Some(Ok(PioCommandWord::from_bits(bits ^ dir_mask)?))
+            );
+        }
+        assert_eq!(commands.next(), Some(Ok(PioCommandWord::END)));
+        assert_eq!(commands.next(), None);
+    }
+    Ok(())
+}
+
+#[test]
+fn verifies_cycle_count_overflow_at_the_first_step_at_tick_two() -> Result<(), ExecutorError> {
+    let points = points([[0.0, 0.0], [9.0 / 16.0, 0.0]]);
+    let limits = limits();
+    let profiles = timed_path(&points, &[0.0; 2], &limits);
+    let converter = JointToStepsConverter::new(1.0, 1.0)?;
+    let config = PioExecutionConfig {
+        timebase: StepTimeBase::new(1)?,
+        timing: StepDirTiming::new(1, 1, 1, 1)?,
+        pio_frequency_hz: u64::MAX,
+        initial_first_direction: Positive,
+        ..two_motor_config()
+    };
+    let mut boundaries = [0; 2];
+    let mut operations = [PinOperationBatch::new(0); 3];
+
+    {
+        let mut commands = build_pio_commands(
+            profiles,
+            converter,
+            config,
+            &mut boundaries,
+            &mut operations,
+        )?;
+        assert_eq!(
+            commands.next(),
+            Some(Err(ExecutorError::CycleCountOverflow))
+        );
+        assert_eq!(commands.next(), None);
+    }
+
+    let verified = build_verified_pio_commands(
+        profiles,
+        converter,
+        config,
+        &mut boundaries,
+        &mut operations,
+    );
+    assert_eq!(verified.err(), Some(ExecutorError::CycleCountOverflow));
+    Ok(())
+}

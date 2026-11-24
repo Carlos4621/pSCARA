@@ -1,0 +1,29 @@
+.program step_dir
+
+.wrap_target
+    pull block
+    out x, 1
+    jmp !x frame
+
+    ; Instrucción de control
+    out x, 31
+    jmp !x finish
+
+    ; Instrucción de control desconocida
+    irq 1
+    jmp halted
+
+finish:
+    irq 0
+
+halted:
+    jmp halted
+
+frame:
+    out x, 27
+
+delay_loop:
+    jmp x-- delay_loop
+
+    out pins, 4
+.wrap

@@ -26,3 +26,8 @@ pub use execution_command_iterator::ExecutionCommandIterator;
 
 mod pio_command_word;
 pub use pio_command_word::PioCommandWord;
+
+mod pio_timing;
+pub use pio_timing::{
+    PIO_FRAME_OVERHEAD_CYCLES, PIO_MAX_FRAME_CYCLES, pio_frame_cycles, pio_wait_counter,
+};

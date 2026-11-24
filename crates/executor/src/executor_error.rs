@@ -11,6 +11,7 @@ pub enum ExecutorError {
     StepPinsNotLow,
     WaitCounterOutOfRange,
     InvalidPioCommandWord,
+    DelayTooShort,
 }
 
 impl From<PlannerError> for ExecutorError {

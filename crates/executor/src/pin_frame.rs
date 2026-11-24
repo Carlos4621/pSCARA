@@ -4,6 +4,7 @@ const FIRST_STEP_MASK: u8 = 1 << 0;
 const FIRST_DIR_MASK: u8 = 1 << 1;
 const SECOND_STEP_MASK: u8 = 1 << 2;
 const SECOND_DIR_MASK: u8 = 1 << 3;
+pub(crate) const STEP_MASK: u8 = FIRST_STEP_MASK | SECOND_STEP_MASK;
 
 /// Estado completo de los pines tras una espera relativa en ticks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

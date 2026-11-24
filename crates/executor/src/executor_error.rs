@@ -6,6 +6,9 @@ pub enum ExecutorError {
     Planner(PlannerError),
     InvalidPinLevels,
     DelayOutOfRange,
+    /// Uno o ambos pines STEP permanecen en nivel alto
+    /// al iniciar o finalizar una secuencia.
+    StepPinsNotLow,
 }
 
 impl From<PlannerError> for ExecutorError {

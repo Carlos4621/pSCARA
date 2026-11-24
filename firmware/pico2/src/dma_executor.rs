@@ -9,6 +9,8 @@ use rp235x_hal::{
     timer::{CopyableTimer0, Timer},
 };
 
+use crate::dma_command_buffer::DmaCommandBuffer;
+
 const IRQ_END: u8 = 1 << 0;
 const IRQ_INVALID_COMMAND: u8 = 1 << 1;
 pub(super) const TX_FIFO_CAPACITY: usize = 8;
@@ -17,7 +19,7 @@ const STEP_MASK: u8 = 0b0101;
 const LEVEL_MASK: u8 = 0b1111;
 
 type StepDirSM = (PIO0, SM0);
-type DmaTransfer = single_buffer::Transfer<Channel<CH0>, &'static [u32], Tx<StepDirSM>>;
+type DmaTransfer = single_buffer::Transfer<Channel<CH0>, DmaCommandBuffer, Tx<StepDirSM>>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PioExecutionError {
@@ -58,7 +60,7 @@ pub enum ExecutionStatus {
     Running,
 }
 
-/// Posee la máquina PIO y el canal DMA hasta finalizar o cancelar la ejecución.
+/// Posee la máquina PIO, el canal DMA y el búfer hasta finalizar o cancelar la ejecución.
 #[must_use]
 pub struct ActiveDmaExecution {
     phase: ExecutionPhase,
@@ -74,6 +76,7 @@ pub enum ExecutionPoll {
     Pending(ActiveDmaExecution),
     Finished {
         executor: DmaExecutor,
+        buffer: DmaCommandBuffer,
         result: Result<(), PioExecutionError>,
     },
 }
@@ -145,12 +148,12 @@ impl DmaExecutor {
         self,
         pio: &mut PIO<PIO0>,
         timer: &Timer<CopyableTimer0>,
-        commands: &'static [u32],
+        buffer: DmaCommandBuffer,
         initial_levels: u8,
         timeout_us: u64,
-    ) -> Result<ActiveDmaExecution, (Self, PioExecutionError)> {
-        if let Err(error) = Self::validate(commands, initial_levels) {
-            return Err((self, error));
+    ) -> Result<ActiveDmaExecution, (Self, DmaCommandBuffer, PioExecutionError)> {
+        if let Err(error) = Self::validate(buffer.as_slice(), initial_levels) {
+            return Err((self, buffer, error));
         }
 
         let Self {
@@ -182,7 +185,7 @@ impl DmaExecutor {
         pio.clear_irq(IRQ_END | IRQ_INVALID_COMMAND);
         tx.clear_stalled_flag();
 
-        let mut dma_config = single_buffer::Config::new(dma_channel, commands, tx);
+        let mut dma_config = single_buffer::Config::new(dma_channel, buffer, tx);
         dma_config.pace(Pace::PreferSink);
         let started_at = timer.get_counter().ticks();
         let transfer = dma_config.start();
@@ -197,25 +200,28 @@ impl DmaExecutor {
         })
     }
 
-    /// Ejecuta la secuencia hasta terminar y devuelve los recursos.
-    #[allow(dead_code, reason = "la prueba de banco usa start y poll directamente")]
+    /// Ejecuta la secuencia hasta terminar y devuelve los recursos y el búfer.
     pub fn execute(
         self,
         pio: &mut PIO<PIO0>,
         timer: &Timer<CopyableTimer0>,
-        commands: &'static [u32],
+        buffer: DmaCommandBuffer,
         initial_levels: u8,
         timeout_us: u64,
-    ) -> (Self, Result<(), PioExecutionError>) {
-        let mut active = match self.start(pio, timer, commands, initial_levels, timeout_us) {
+    ) -> (Self, DmaCommandBuffer, Result<(), PioExecutionError>) {
+        let mut active = match self.start(pio, timer, buffer, initial_levels, timeout_us) {
             Ok(active) => active,
-            Err((executor, error)) => return (executor, Err(error)),
+            Err((executor, buffer, error)) => return (executor, buffer, Err(error)),
         };
 
         loop {
             match active.poll(pio, timer) {
                 ExecutionPoll::Pending(next) => active = next,
-                ExecutionPoll::Finished { executor, result } => return (executor, result),
+                ExecutionPoll::Finished {
+                    executor,
+                    buffer,
+                    result,
+                } => return (executor, buffer, result),
             }
         }
     }
@@ -238,9 +244,9 @@ impl ActiveDmaExecution {
         }
     }
 
-    /// Cancela la ejecución y recupera los recursos.
+    /// Cancela la ejecución y recupera los recursos y el búfer.
     /// La posición mecánica resultante no está garantizada.
-    pub fn cancel(self) -> (DmaExecutor, Result<(), PioExecutionError>) {
+    pub fn cancel(self) -> (DmaExecutor, DmaCommandBuffer, Result<(), PioExecutionError>) {
         self.finalize(Err(PioExecutionError::Cancelled))
     }
 
@@ -287,14 +293,18 @@ impl ActiveDmaExecution {
     }
 
     fn finish(self, result: Result<(), PioExecutionError>) -> ExecutionPoll {
-        let (executor, result) = self.finalize(result);
-        ExecutionPoll::Finished { executor, result }
+        let (executor, buffer, result) = self.finalize(result);
+        ExecutionPoll::Finished {
+            executor,
+            buffer,
+            result,
+        }
     }
 
     fn finalize(
         self,
         mut result: Result<(), PioExecutionError>,
-    ) -> (DmaExecutor, Result<(), PioExecutionError>) {
+    ) -> (DmaExecutor, DmaCommandBuffer, Result<(), PioExecutionError>) {
         let Self {
             phase,
             transfer,
@@ -317,7 +327,7 @@ impl ActiveDmaExecution {
             sm.set_pins(step_pins_low);
         }
 
-        let (dma_channel, _, tx) = if transfer.is_done() {
+        let (dma_channel, buffer, tx) = if transfer.is_done() {
             transfer.wait()
         } else {
             transfer.abort()
@@ -358,6 +368,7 @@ impl ActiveDmaExecution {
                 output_gpios,
                 clock_divisor,
             },
+            buffer,
             result,
         )
     }

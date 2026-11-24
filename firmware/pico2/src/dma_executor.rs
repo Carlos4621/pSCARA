@@ -1,10 +1,10 @@
 use executor::PioCommandWord;
 use rp235x_hal::{
     dma::{CH0, Channel, Pace, SingleChannel, single_buffer},
-    pac::PIO0,
+    pac::{self, PIO0},
     pio::{
-        Buffers, InstalledProgram, PIO, PIOBuilder, PinDir, PinState, SM0, ShiftDirection,
-        UninitStateMachine,
+        Buffers, InstalledProgram, PIO, PIOBuilder, PinDir, PinState, Running, Rx, SM0,
+        ShiftDirection, StateMachine, Stopped, Tx, UninitStateMachine,
     },
     timer::{CopyableTimer0, Timer},
 };
@@ -15,6 +15,9 @@ pub(super) const TX_FIFO_CAPACITY: usize = 8;
 const PRELOAD_TIMEOUT_US: u64 = 10_000;
 const STEP_MASK: u8 = 0b0101;
 const LEVEL_MASK: u8 = 0b1111;
+
+type StepDirSM = (PIO0, SM0);
+type DmaTransfer = single_buffer::Transfer<Channel<CH0>, &'static [u32], Tx<StepDirSM>>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PioExecutionError {
@@ -30,17 +33,65 @@ pub enum PioExecutionError {
 }
 
 pub struct DmaExecutor {
-    sm: UninitStateMachine<(PIO0, SM0)>,
+    sm: UninitStateMachine<StepDirSM>,
     program: InstalledProgram<PIO0>,
     dma_channel: Channel<CH0>,
     output_gpios: [u8; 4],
     clock_divisor: u16,
 }
 
+enum ExecutionPhase {
+    Preloading {
+        sm: StateMachine<StepDirSM, Stopped>,
+        started_at: u64,
+    },
+    Running {
+        sm: StateMachine<StepDirSM, Running>,
+        started_at: u64,
+    },
+}
+
+/// Posee la máquina PIO y el canal DMA hasta que `poll` devuelve los recursos.
+#[must_use]
+pub struct ActiveDmaExecution {
+    phase: ExecutionPhase,
+    transfer: DmaTransfer,
+    rx: Rx<StepDirSM>,
+    output_gpios: [u8; 4],
+    clock_divisor: u16,
+    timeout_us: u64,
+}
+
+#[must_use]
+pub enum ExecutionPoll {
+    Pending(ActiveDmaExecution),
+    Finished {
+        executor: DmaExecutor,
+        result: Result<(), PioExecutionError>,
+    },
+}
+
+fn pio_has_stalled() -> bool {
+    // SAFETY: lectura volátil de FDEBUG de PIO0 sin efectos laterales.
+    unsafe { (&*pac::PIO0::ptr()).fdebug().read().txstall().bits() & 1 != 0 }
+}
+
+fn dma_has_bus_error() -> bool {
+    // SAFETY: lectura volátil del estado de DMA0 sin efectos laterales.
+    unsafe {
+        (&*pac::DMA::ptr())
+            .ch(0)
+            .ch_ctrl_trig()
+            .read()
+            .ahb_error()
+            .bit_is_set()
+    }
+}
+
 impl DmaExecutor {
     /// Los GPIO deben ser consecutivos, en orden STEP 1, DIR 1, STEP 2, DIR 2.
     pub fn new(
-        sm: UninitStateMachine<(PIO0, SM0)>,
+        sm: UninitStateMachine<StepDirSM>,
         program: InstalledProgram<PIO0>,
         dma_channel: Channel<CH0>,
         output_gpios: [u8; 4],
@@ -82,17 +133,17 @@ impl DmaExecutor {
         Ok(())
     }
 
-    /// Ejecuta la secuencia y devuelve los recursos para la siguiente llamada.
-    pub fn execute(
+    /// Configura PIO e inicia la precarga por DMA.
+    pub fn start(
         self,
         pio: &mut PIO<PIO0>,
         timer: &Timer<CopyableTimer0>,
         commands: &'static [u32],
         initial_levels: u8,
         timeout_us: u64,
-    ) -> (Self, Result<(), PioExecutionError>) {
+    ) -> Result<ActiveDmaExecution, (Self, PioExecutionError)> {
         if let Err(error) = Self::validate(commands, initial_levels) {
-            return (self, Err(error));
+            return Err((self, error));
         }
 
         let Self {
@@ -126,41 +177,98 @@ impl DmaExecutor {
 
         let mut dma_config = single_buffer::Config::new(dma_channel, commands, tx);
         dma_config.pace(Pace::PreferSink);
+        let started_at = timer.get_counter().ticks();
         let transfer = dma_config.start();
 
-        // DMA llena la FIFO con la máquina detenida. Una secuencia corta cabe completa.
-        let preload_started = timer.get_counter().ticks();
-        let preload_ok = loop {
-            if transfer.is_done() || !pio.irq0().raw().sm0_tx_not_full() {
-                break true;
-            }
-            if timer.get_counter().ticks().wrapping_sub(preload_started) >= PRELOAD_TIMEOUT_US {
-                break false;
-            }
+        Ok(ActiveDmaExecution {
+            phase: ExecutionPhase::Preloading { sm, started_at },
+            transfer,
+            rx,
+            output_gpios,
+            clock_divisor,
+            timeout_us,
+        })
+    }
+
+    /// Ejecuta la secuencia hasta terminar y devuelve los recursos.
+    #[allow(dead_code, reason = "la prueba de banco usa start y poll directamente")]
+    pub fn execute(
+        self,
+        pio: &mut PIO<PIO0>,
+        timer: &Timer<CopyableTimer0>,
+        commands: &'static [u32],
+        initial_levels: u8,
+        timeout_us: u64,
+    ) -> (Self, Result<(), PioExecutionError>) {
+        let mut active = match self.start(pio, timer, commands, initial_levels, timeout_us) {
+            Ok(active) => active,
+            Err((executor, error)) => return (executor, Err(error)),
         };
 
-        let (mut sm, mut result) = if preload_ok {
-            let started_at = timer.get_counter().ticks();
-            let running_sm = sm.start();
-            let result = loop {
+        loop {
+            match active.poll(pio, timer) {
+                ExecutionPoll::Pending(next) => active = next,
+                ExecutionPoll::Finished { executor, result } => return (executor, result),
+            }
+        }
+    }
+}
+
+impl ActiveDmaExecution {
+    /// Consulta el estado y devuelve el control mientras la ejecución sigue activa.
+    pub fn poll(mut self, pio: &mut PIO<PIO0>, timer: &Timer<CopyableTimer0>) -> ExecutionPoll {
+        let now = timer.get_counter().ticks();
+        if dma_has_bus_error() {
+            return self.finish(Err(PioExecutionError::DmaBusError));
+        }
+        if pio_has_stalled() {
+            return self.finish(Err(PioExecutionError::FifoUnderrun));
+        }
+
+        match self.phase {
+            ExecutionPhase::Preloading { sm, .. }
+                if self.transfer.is_done() || !pio.irq0().raw().sm0_tx_not_full() =>
+            {
+                self.phase = ExecutionPhase::Running {
+                    sm: sm.start(),
+                    started_at: now,
+                };
+            }
+            ExecutionPhase::Preloading { started_at, .. } => {
+                if now.wrapping_sub(started_at) >= PRELOAD_TIMEOUT_US {
+                    return self.finish(Err(PioExecutionError::PreloadFailed));
+                }
+            }
+            ExecutionPhase::Running { started_at, .. } => {
                 let irqs = pio.get_irq_raw();
                 if irqs & IRQ_INVALID_COMMAND != 0 {
-                    break Err(PioExecutionError::InvalidCommand);
+                    return self.finish(Err(PioExecutionError::InvalidCommand));
                 }
                 // DMA puede terminar mientras PIO aún ejecuta las últimas palabras.
-                if irqs & IRQ_END != 0 {
-                    if !transfer.is_done() {
-                        break Err(PioExecutionError::DmaIncomplete);
-                    }
-                    break Ok(());
+                if irqs & IRQ_END != 0 && self.transfer.is_done() {
+                    return self.finish(Ok(()));
                 }
-                if timer.get_counter().ticks().wrapping_sub(started_at) >= timeout_us {
-                    break Err(PioExecutionError::Timeout);
+                if now.wrapping_sub(started_at) >= self.timeout_us {
+                    return self.finish(Err(PioExecutionError::Timeout));
                 }
-            };
-            (running_sm.stop(), result)
-        } else {
-            (sm, Err(PioExecutionError::PreloadFailed))
+            }
+        }
+
+        ExecutionPoll::Pending(self)
+    }
+
+    fn finish(self, mut result: Result<(), PioExecutionError>) -> ExecutionPoll {
+        let Self {
+            phase,
+            transfer,
+            rx,
+            output_gpios,
+            clock_divisor,
+            ..
+        } = self;
+        let mut sm = match phase {
+            ExecutionPhase::Preloading { sm, .. } => sm,
+            ExecutionPhase::Running { sm, .. } => sm.stop(),
         };
 
         let step_pins_low = [
@@ -205,8 +313,8 @@ impl DmaExecutor {
         sm.clear_fifos();
         let (sm, program) = sm.uninit(rx, tx);
 
-        (
-            Self {
+        ExecutionPoll::Finished {
+            executor: DmaExecutor {
                 sm,
                 program,
                 dma_channel,
@@ -214,6 +322,6 @@ impl DmaExecutor {
                 clock_divisor,
             },
             result,
-        )
+        }
     }
 }

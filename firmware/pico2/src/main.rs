@@ -4,7 +4,7 @@
 mod dma_executor;
 
 use defmt_rtt as _;
-use dma_executor::{DmaExecutor, TX_FIFO_CAPACITY};
+use dma_executor::{DmaExecutor, ExecutionPoll, TX_FIFO_CAPACITY};
 use embedded_hal::digital::OutputPin;
 use executor::{PioExecutionConfig, build_verified_pio_commands};
 use kinematics::JointAngles;
@@ -162,17 +162,35 @@ fn main() -> ! {
     assert!(command_count > TX_FIFO_CAPACITY);
 
     for iteration in 0..3 {
-        let (returned_executor, result) = executor.execute(
+        let mut active = match executor.start(
             &mut pio,
             &timer,
             commands,
             config.initial_levels(),
             SUPERVISION_TIMEOUT_US,
-        );
+        ) {
+            Ok(active) => active,
+            Err((_, error)) => panic!("no se pudo iniciar la ejecución DMA: {error:?}"),
+        };
+        let mut cpu_iterations = 0u64;
+        let (returned_executor, result) = loop {
+            match active.poll(&mut pio, &timer) {
+                ExecutionPoll::Pending(next) => active = next,
+                ExecutionPoll::Finished { executor, result } => break (executor, result),
+            }
+            cpu_iterations += 1;
+        };
         executor = returned_executor;
 
         match result {
-            Ok(()) => defmt::info!("Ejecución {} completada", iteration + 1),
+            Ok(()) => {
+                assert!(cpu_iterations > 0);
+                defmt::info!(
+                    "Ejecución {} completada con {} iteraciones disponibles para otras tareas",
+                    iteration + 1,
+                    cpu_iterations
+                );
+            }
             Err(error) => {
                 defmt::error!(
                     "Fallo de la prueba STEP/DIR: {:?}",

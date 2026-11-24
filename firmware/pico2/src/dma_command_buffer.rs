@@ -37,6 +37,10 @@ impl DmaCommandBuffer {
         &self.storage[..self.len]
     }
 
+    #[allow(
+        dead_code,
+        reason = "la prueba carga los búferes mediante el lector de bloques"
+    )]
     pub fn push(&mut self, command: PioCommandWord) -> bool {
         if self.len == self.capacity() {
             return false;

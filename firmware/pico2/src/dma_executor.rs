@@ -11,10 +11,10 @@ use rp235x_hal::{
 
 use crate::dma_command_buffer::DmaCommandBuffer;
 
-const IRQ_END: u8 = 1 << 0;
-const IRQ_INVALID_COMMAND: u8 = 1 << 1;
+pub(super) const IRQ_END: u8 = 1 << 0;
+pub(super) const IRQ_INVALID_COMMAND: u8 = 1 << 1;
 pub(super) const TX_FIFO_CAPACITY: usize = 8;
-const PRELOAD_TIMEOUT_US: u64 = 10_000;
+pub(super) const PRELOAD_TIMEOUT_US: u64 = 10_000;
 const STEP_MASK: u8 = 0b0101;
 const LEVEL_MASK: u8 = 0b1111;
 
@@ -81,7 +81,7 @@ pub enum ExecutionPoll {
     },
 }
 
-fn pio_has_stalled() -> bool {
+pub(super) fn pio_has_stalled() -> bool {
     // SAFETY: lectura volátil de FDEBUG de PIO0 sin efectos laterales.
     unsafe { (&*pac::PIO0::ptr()).fdebug().read().txstall().bits() & 1 != 0 }
 }

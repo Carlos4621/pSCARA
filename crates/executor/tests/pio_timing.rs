@@ -1,7 +1,8 @@
 use executor::{
     ExecutorError, PIO_FRAME_OVERHEAD_CYCLES, PIO_MAX_FRAME_CYCLES, PioCommandWord,
-    pio_frame_cycles, pio_wait_counter,
+    pio_cycles_per_tick, pio_frame_cycles, pio_wait_counter,
 };
+use planner::StepTimeBase;
 
 #[test]
 fn converts_between_counters_and_expected_frame_cycles() {
@@ -63,5 +64,49 @@ fn conversions_are_inverses_around_each_counter_bit_boundary() {
                 Ok(counter)
             );
         }
+    }
+}
+
+#[test]
+fn returns_exact_ratios_at_and_above_six_cycles_per_tick() {
+    let largest_tick_rate_with_ratio_six = u64::MAX / 6;
+    for (ticks_per_second, pio_frequency_hz, expected_ratio) in [
+        (1_000_000, 6_000_000, 6),
+        (1_000_000, 100_000_000, 100),
+        (
+            largest_tick_rate_with_ratio_six,
+            largest_tick_rate_with_ratio_six * 6,
+            6,
+        ),
+        (3, u64::MAX, u64::MAX / 3),
+        (1, u64::MAX, u64::MAX),
+    ] {
+        let timebase = StepTimeBase::new(ticks_per_second).unwrap();
+        assert_eq!(
+            pio_cycles_per_tick(timebase, pio_frequency_hz),
+            Ok(expected_ratio)
+        );
+    }
+}
+
+#[test]
+fn rejects_zero_fractional_and_too_small_clock_ratios() {
+    for (ticks_per_second, pio_frequency_hz) in [
+        (10, 0),
+        (10, 9),
+        (10, 10),
+        (10, 50),
+        (10, 59),
+        (10, 61),
+        (10, 99),
+        (2, u64::MAX),
+        (u64::MAX, u64::MAX),
+    ] {
+        let timebase = StepTimeBase::new(ticks_per_second).unwrap();
+        assert_eq!(
+            pio_cycles_per_tick(timebase, pio_frequency_hz),
+            Err(ExecutorError::InvalidPioClockRatio),
+            "frecuencias PIO y del planificador: {pio_frequency_hz} y {ticks_per_second}"
+        );
     }
 }

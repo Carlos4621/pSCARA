@@ -29,5 +29,9 @@ pub use pio_command_word::PioCommandWord;
 
 mod pio_timing;
 pub use pio_timing::{
-    PIO_FRAME_OVERHEAD_CYCLES, PIO_MAX_FRAME_CYCLES, pio_frame_cycles, pio_wait_counter,
+    PIO_FRAME_OVERHEAD_CYCLES, PIO_MAX_FRAME_CYCLES, pio_cycles_per_tick, pio_frame_cycles,
+    pio_wait_counter,
 };
+
+mod pio_frame_splitter;
+pub use pio_frame_splitter::PioFrameSplitter;

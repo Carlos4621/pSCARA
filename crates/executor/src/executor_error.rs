@@ -12,6 +12,7 @@ pub enum ExecutorError {
     WaitCounterOutOfRange,
     InvalidPioCommandWord,
     DelayTooShort,
+    InvalidPioClockRatio,
 }
 
 impl From<PlannerError> for ExecutorError {

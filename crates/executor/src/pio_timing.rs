@@ -1,3 +1,5 @@
+use planner::StepTimeBase;
+
 use crate::{ExecutorError, PioCommandWord};
 
 /// Sobrecoste por trama de `step_dir` en ciclos de la máquina de estados.
@@ -27,4 +29,24 @@ pub fn pio_wait_counter(cycles: u64) -> Result<u32, ExecutorError> {
     }
 
     Ok((cycles - PIO_FRAME_OVERHEAD_CYCLES) as u32)
+}
+
+/// Devuelve la cantidad exacta de ciclos PIO por tick del planificador.
+/// La frecuencia PIO debe ser un múltiplo de la frecuencia del planificador
+/// y permitir al menos [`PIO_FRAME_OVERHEAD_CYCLES`] ciclos por tick.
+pub fn pio_cycles_per_tick(
+    timebase: StepTimeBase,
+    pio_frequency_hz: u64,
+) -> Result<u64, ExecutorError> {
+    let ticks_per_second = timebase.ticks_per_second();
+    if pio_frequency_hz == 0 || !pio_frequency_hz.is_multiple_of(ticks_per_second) {
+        return Err(ExecutorError::InvalidPioClockRatio);
+    }
+
+    let cycles_per_tick = pio_frequency_hz / ticks_per_second;
+    if cycles_per_tick < PIO_FRAME_OVERHEAD_CYCLES {
+        return Err(ExecutorError::InvalidPioClockRatio);
+    }
+
+    Ok(cycles_per_tick)
 }

@@ -23,3 +23,6 @@ pub use execution_command::ExecutionCommand;
 
 mod execution_command_iterator;
 pub use execution_command_iterator::ExecutionCommandIterator;
+
+mod pio_command_word;
+pub use pio_command_word::PioCommandWord;

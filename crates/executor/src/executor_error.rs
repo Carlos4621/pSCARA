@@ -9,6 +9,8 @@ pub enum ExecutorError {
     /// Uno o ambos pines STEP permanecen en nivel alto
     /// al iniciar o finalizar una secuencia.
     StepPinsNotLow,
+    WaitCounterOutOfRange,
+    InvalidPioCommandWord,
 }
 
 impl From<PlannerError> for ExecutorError {

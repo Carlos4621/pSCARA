@@ -1,12 +1,12 @@
 #![no_std]
 #![no_main]
 
-mod cpu_executor;
+mod dma_executor;
 
-use cpu_executor::{CpuExecutor, TX_FIFO_CAPACITY};
 use defmt_rtt as _;
+use dma_executor::{DmaExecutor, TX_FIFO_CAPACITY};
 use embedded_hal::digital::OutputPin;
-use executor::{PioCommandWord, PioExecutionConfig, build_verified_pio_commands};
+use executor::{PioExecutionConfig, build_verified_pio_commands};
 use kinematics::JointAngles;
 use panic_probe as _;
 use planner::{
@@ -17,6 +17,7 @@ use planner::{
 use rp235x_hal::{
     self as hal, Clock,
     clocks::init_clocks_and_plls,
+    dma::DMAExt,
     entry,
     gpio::{FunctionPio0, PinState as GpioPinState},
     pac,
@@ -108,7 +109,8 @@ fn main() -> ! {
         select_program("step_dir")
     );
     let installed = pio.install(&program.program).unwrap();
-    let mut executor = CpuExecutor::new(sm0, installed, output_gpios, divisor);
+    let dma = pac.DMA.split(&mut pac.RESETS);
+    let mut executor = DmaExecutor::new(sm0, installed, dma.ch0, output_gpios, divisor);
 
     let points = [
         JointAngles::new(0.0, 0.0).unwrap(),
@@ -144,17 +146,19 @@ fn main() -> ! {
         &mut operations,
     )
     .expect("no se pudieron verificar las palabras PIO");
-    let mut command_buffer = [PioCommandWord::END; COMMAND_BUFFER_CAPACITY];
+    let command_buffer =
+        cortex_m::singleton!(: [u32; COMMAND_BUFFER_CAPACITY] = [0; COMMAND_BUFFER_CAPACITY])
+            .unwrap();
     let mut command_count = 0;
     for command in commands {
         assert!(
             command_count < command_buffer.len(),
             "la trayectoria excede la capacidad del búfer PIO"
         );
-        command_buffer[command_count] = command.expect("no se pudo generar una palabra PIO");
+        command_buffer[command_count] = command.expect("no se pudo generar una palabra PIO").bits();
         command_count += 1;
     }
-    let commands = &command_buffer[..command_count];
+    let commands: &'static [u32] = &command_buffer[..command_count];
     assert!(command_count > TX_FIFO_CAPACITY);
 
     for iteration in 0..3 {

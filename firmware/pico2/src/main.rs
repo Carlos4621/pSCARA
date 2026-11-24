@@ -3,8 +3,14 @@
 
 use defmt_rtt as _;
 use embedded_hal::digital::OutputPin;
-use executor::PioCommandWord;
+use executor::{PioExecutionConfig, build_verified_pio_commands};
+use kinematics::JointAngles;
 use panic_probe as _;
+use planner::{
+    CoordinatedJointPathProfiles, JointAccelerationLimits, JointToStepsConverter,
+    JointVelocityLimits, PinOperationBatch, StepDirTiming, StepDirection, StepTimeBase,
+    TimedCoordinatedJointPathProfiles,
+};
 use rp235x_hal::{
     self as hal, Clock,
     clocks::init_clocks_and_plls,
@@ -16,7 +22,17 @@ use rp235x_hal::{
 
 const XOSC_HZ: u32 = 12_000_000;
 const PIO_HZ: u32 = 1_000_000;
-const SUPERVISION_TIMEOUT_US: u64 = 10_000;
+const SUPERVISION_TIMEOUT_US: u64 = 2_000_000;
+
+const EXPECTED_WORDS: [u32; 7] = [
+    0xA007_A120,
+    0x3003_D084,
+    0x6003_D084,
+    0x2003_D084,
+    0x3003_D084,
+    0x2003_D084,
+    0x0000_0001,
+];
 
 const IRQ_END: u8 = 1 << 0;
 const IRQ_INVALID_COMMAND: u8 = 1 << 1;
@@ -32,10 +48,10 @@ static PICOTOOL_ENTRIES: [hal::binary_info::EntryAddr; 3] = [
     hal::binary_info::rp_cargo_version!(),
     #[cfg(feature = "adafruit-feather-rp2350")]
     hal::binary_info::rp_program_description!(
-        c"SCARA STEP/DIR bench test (Adafruit Feather RP2350, A0-A3)"
+        c"SCARA planned STEP/DIR bench test (Adafruit Feather RP2350, A0-A3)"
     ),
     #[cfg(not(feature = "adafruit-feather-rp2350"))]
-    hal::binary_info::rp_program_description!(c"SCARA STEP/DIR bench test"),
+    hal::binary_info::rp_program_description!(c"SCARA planned STEP/DIR bench test"),
 ];
 
 #[entry]
@@ -109,24 +125,63 @@ fn main() -> ! {
         .buffers(Buffers::OnlyTx)
         .build(sm0);
 
-    sm.set_pins(output_gpios.map(|pin| (pin, PinState::Low)));
+    let points = [
+        JointAngles::new(0.0, 0.0).unwrap(),
+        JointAngles::new(0.25, -0.25).unwrap(),
+    ];
+    let speeds = [0.0; 2];
+    let velocity_limits = JointVelocityLimits::new(10.0, 10.0).unwrap();
+    let acceleration_limits = JointAccelerationLimits::new(1.0, 1.0).unwrap();
+    let path =
+        CoordinatedJointPathProfiles::new(&points, &speeds, &velocity_limits, &acceleration_limits)
+            .unwrap();
+    let profiles = TimedCoordinatedJointPathProfiles::new(path).unwrap();
+    // Factores de prueba que producen dos pasos en el primer eje y uno en el segundo.
+    let converter = JointToStepsConverter::new(8.0, 4.0).unwrap();
+    let config = PioExecutionConfig {
+        timebase: StepTimeBase::new(8).unwrap(),
+        timing: StepDirTiming::new(125_000_000, 125_000_000, 1, 1).unwrap(),
+        pio_frequency_hz: u64::from(PIO_HZ),
+        initial_first_direction: StepDirection::Negative,
+        initial_second_direction: StepDirection::Positive,
+        first_positive_is_high: true,
+        second_positive_is_high: true,
+    };
+
+    let initial_levels = config.initial_levels();
+    assert_eq!(initial_levels, 0b1000);
+    sm.set_pins(output_gpios.map(|pin| {
+        let bit = pin - output_gpios[0];
+        let state = if initial_levels & (1 << bit) != 0 {
+            PinState::High
+        } else {
+            PinState::Low
+        };
+        (pin, state)
+    }));
     sm.set_pindirs(output_gpios.map(|pin| (pin, PinDir::Output)));
 
-    let commands = [
-        PioCommandWord::frame(0, 0b0010).unwrap(),
-        PioCommandWord::frame(94, 0b0011).unwrap(),
-        PioCommandWord::frame(14, 0b0010).unwrap(),
-        PioCommandWord::frame(74, 0b1010).unwrap(),
-        PioCommandWord::frame(94, 0b1111).unwrap(),
-        PioCommandWord::frame(14, 0b1010).unwrap(),
-        PioCommandWord::END,
-    ];
+    let mut boundaries = [0; 2];
+    let mut operations = [PinOperationBatch::new(0); 4];
+    let commands = build_verified_pio_commands(
+        profiles,
+        converter,
+        config,
+        &mut boundaries,
+        &mut operations,
+    )
+    .expect("no se pudieron verificar las palabras PIO");
+    let mut command_count = 0;
     for command in commands {
-        assert!(
-            tx.write(command.bits()),
-            "la FIFO TX no admitió todas las palabras"
-        );
+        let word = command.expect("no se pudo generar una palabra PIO").bits();
+        let expected = EXPECTED_WORDS
+            .get(command_count)
+            .expect("el ejecutor generó más palabras PIO de las esperadas");
+        assert_eq!(word, *expected, "palabra PIO {command_count}");
+        assert!(tx.write(word), "la FIFO TX no admitió todas las palabras");
+        command_count += 1;
     }
+    assert_eq!(command_count, EXPECTED_WORDS.len());
 
     pio.clear_irq(IRQ_END | IRQ_INVALID_COMMAND);
     tx.clear_stalled_flag();

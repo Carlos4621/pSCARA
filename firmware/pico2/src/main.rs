@@ -149,14 +149,20 @@ fn main() -> ! {
             break Err("PIO no informó la finalización dentro del tiempo límite");
         }
     };
-    let _sm = sm.stop();
+    let mut sm = sm.stop();
 
     match result {
         Ok(()) => {
             led.set_high().unwrap();
             defmt::info!("Secuencia STEP/DIR finalizada");
         }
-        Err(reason) => defmt::error!("Fallo de la prueba STEP/DIR: {=str}", reason),
+        Err(reason) => {
+            sm.set_pins([
+                (output_gpios[0], PinState::Low),
+                (output_gpios[2], PinState::Low),
+            ]);
+            defmt::error!("Fallo de la prueba STEP/DIR: {=str}", reason);
+        }
     }
 
     loop {

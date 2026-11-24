@@ -10,7 +10,9 @@ use dma_executor::{
     DmaExecutor, ExecutionPoll, ExecutionStatus, PioExecutionError, TX_FIFO_CAPACITY,
 };
 use embedded_hal::{delay::DelayNs, digital::OutputPin};
-use executor::{PioCommandWord, PioExecutionConfig, build_verified_pio_commands};
+use executor::{
+    PioCommandBlockReader, PioCommandWord, PioExecutionConfig, build_verified_pio_commands,
+};
 use kinematics::JointAngles;
 use panic_probe as _;
 use planner::{
@@ -329,11 +331,13 @@ fn load_bench_trajectory(
         &mut operations,
     )
     .expect("no se pudieron verificar las palabras PIO");
-    buffer.clear();
-    for command in commands {
-        assert!(
-            buffer.push(command.expect("no se pudo generar una palabra PIO")),
-            "la trayectoria excede la capacidad del búfer PIO"
-        );
-    }
+    let mut reader = PioCommandBlockReader::new(commands);
+    let block = buffer
+        .fill_from(&mut reader)
+        .expect("no se pudo leer el bloque de palabras PIO")
+        .expect("la trayectoria debe contener un bloque PIO");
+    assert!(
+        block.is_final,
+        "la trayectoria excede la capacidad del búfer PIO"
+    );
 }

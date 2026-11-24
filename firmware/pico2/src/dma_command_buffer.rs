@@ -1,4 +1,4 @@
-use executor::PioCommandWord;
+use executor::{ExecutorError, PioCommandBlock, PioCommandBlockReader, PioCommandWord};
 use rp235x_hal::dma::ReadTarget;
 
 // TRANS_COUNT reserva los cuatro bits superiores para el modo de transferencia.
@@ -44,6 +44,22 @@ impl DmaCommandBuffer {
         self.storage[self.len] = command.bits();
         self.len += 1;
         true
+    }
+
+    /// Lee el siguiente bloque directamente en la memoria que usará DMA.
+    pub fn fill_from<I>(
+        &mut self,
+        reader: &mut PioCommandBlockReader<I>,
+    ) -> Result<Option<PioCommandBlock>, ExecutorError>
+    where
+        I: Iterator<Item = Result<PioCommandWord, ExecutorError>>,
+    {
+        self.clear();
+        let block = reader.next_block(self.storage)?;
+        if let Some(block) = block {
+            self.len = block.len;
+        }
+        Ok(block)
     }
 }
 

@@ -39,6 +39,9 @@ pub use pio_frame_splitter::PioFrameSplitter;
 mod pio_command_iterator;
 pub use pio_command_iterator::PioCommandIterator;
 
+mod pio_command_block_reader;
+pub use pio_command_block_reader::{PioCommandBlock, PioCommandBlockReader};
+
 mod pio_execution_config;
 pub use pio_execution_config::PioExecutionConfig;
 

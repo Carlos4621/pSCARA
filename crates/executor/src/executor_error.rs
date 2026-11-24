@@ -15,6 +15,8 @@ pub enum ExecutorError {
     InvalidPioClockRatio,
     CycleCountOverflow,
     MissingEndCommand,
+    EmptyCommandBuffer,
+    UnexpectedCommandAfterEnd,
 }
 
 impl From<PlannerError> for ExecutorError {

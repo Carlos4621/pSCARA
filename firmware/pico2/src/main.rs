@@ -3,7 +3,7 @@
 
 use defmt_rtt as _;
 use embedded_hal::digital::OutputPin;
-use executor::{PioExecutionConfig, build_verified_pio_commands};
+use executor::{PioCommandWord, PioExecutionConfig, build_verified_pio_commands};
 use kinematics::JointAngles;
 use panic_probe as _;
 use planner::{
@@ -22,17 +22,9 @@ use rp235x_hal::{
 
 const XOSC_HZ: u32 = 12_000_000;
 const PIO_HZ: u32 = 1_000_000;
-const SUPERVISION_TIMEOUT_US: u64 = 2_000_000;
-
-const EXPECTED_WORDS: [u32; 7] = [
-    0xA007_A120,
-    0x3003_D084,
-    0x6003_D084,
-    0x2003_D084,
-    0x3003_D084,
-    0x2003_D084,
-    0x0000_0001,
-];
+const COMMAND_BUFFER_CAPACITY: usize = 32;
+const TX_FIFO_CAPACITY: usize = 8;
+const SUPERVISION_TIMEOUT_US: u64 = 3_000_000;
 
 const IRQ_END: u8 = 1 << 0;
 const IRQ_INVALID_COMMAND: u8 = 1 << 1;
@@ -128,15 +120,16 @@ fn main() -> ! {
     let points = [
         JointAngles::new(0.0, 0.0).unwrap(),
         JointAngles::new(0.25, -0.25).unwrap(),
+        JointAngles::new(0.50, -0.50).unwrap(),
     ];
-    let speeds = [0.0; 2];
+    let speeds = [0.0; 3];
     let velocity_limits = JointVelocityLimits::new(10.0, 10.0).unwrap();
     let acceleration_limits = JointAccelerationLimits::new(1.0, 1.0).unwrap();
     let path =
         CoordinatedJointPathProfiles::new(&points, &speeds, &velocity_limits, &acceleration_limits)
             .unwrap();
     let profiles = TimedCoordinatedJointPathProfiles::new(path).unwrap();
-    // Factores de prueba que producen dos pasos en el primer eje y uno en el segundo.
+    // Factores de prueba que producen cuatro pasos en el primer eje y dos en el segundo.
     let converter = JointToStepsConverter::new(8.0, 4.0).unwrap();
     let config = PioExecutionConfig {
         timebase: StepTimeBase::new(8).unwrap(),
@@ -161,8 +154,8 @@ fn main() -> ! {
     }));
     sm.set_pindirs(output_gpios.map(|pin| (pin, PinDir::Output)));
 
-    let mut boundaries = [0; 2];
-    let mut operations = [PinOperationBatch::new(0); 4];
+    let mut boundaries = [0; 3];
+    let mut operations = [PinOperationBatch::new(0); 8];
     let commands = build_verified_pio_commands(
         profiles,
         converter,
@@ -171,17 +164,33 @@ fn main() -> ! {
         &mut operations,
     )
     .expect("no se pudieron verificar las palabras PIO");
+    let mut command_buffer = [PioCommandWord::END; COMMAND_BUFFER_CAPACITY];
     let mut command_count = 0;
     for command in commands {
-        let word = command.expect("no se pudo generar una palabra PIO").bits();
-        let expected = EXPECTED_WORDS
-            .get(command_count)
-            .expect("el ejecutor generó más palabras PIO de las esperadas");
-        assert_eq!(word, *expected, "palabra PIO {command_count}");
-        assert!(tx.write(word), "la FIFO TX no admitió todas las palabras");
+        assert!(
+            command_count < command_buffer.len(),
+            "la trayectoria excede la capacidad del búfer PIO"
+        );
+        command_buffer[command_count] = command.expect("no se pudo generar una palabra PIO");
         command_count += 1;
     }
-    assert_eq!(command_count, EXPECTED_WORDS.len());
+    let commands = &command_buffer[..command_count];
+    assert!(command_count > TX_FIFO_CAPACITY);
+    assert_eq!(commands.last(), Some(&PioCommandWord::END));
+    assert!(
+        commands[..command_count - 1]
+            .iter()
+            .all(|command| !command.is_end())
+    );
+
+    let mut next_command = 0;
+    while next_command < commands.len() && next_command < TX_FIFO_CAPACITY {
+        assert!(
+            tx.write(commands[next_command].bits()),
+            "la FIFO TX no admitió la precarga"
+        );
+        next_command += 1;
+    }
 
     pio.clear_irq(IRQ_END | IRQ_INVALID_COMMAND);
     tx.clear_stalled_flag();
@@ -198,10 +207,16 @@ fn main() -> ! {
             break Err("PIO recibió una instrucción de control inválida");
         }
         if irqs & IRQ_END != 0 {
+            if next_command != commands.len() {
+                break Err("PIO informó la finalización antes de transferir todas las palabras");
+            }
             break Ok(());
         }
         if timer.get_counter().ticks().wrapping_sub(started_at) >= SUPERVISION_TIMEOUT_US {
             break Err("PIO no informó la finalización dentro del tiempo límite");
+        }
+        if next_command < commands.len() && tx.write(commands[next_command].bits()) {
+            next_command += 1;
         }
     };
     let mut sm = sm.stop();

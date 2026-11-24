@@ -1,6 +1,9 @@
 #![no_std]
 #![no_main]
 
+mod cpu_executor;
+
+use cpu_executor::{CpuExecutor, TX_FIFO_CAPACITY};
 use defmt_rtt as _;
 use embedded_hal::digital::OutputPin;
 use executor::{PioCommandWord, PioExecutionConfig, build_verified_pio_commands};
@@ -17,17 +20,13 @@ use rp235x_hal::{
     entry,
     gpio::{FunctionPio0, PinState as GpioPinState},
     pac,
-    pio::{Buffers, PIOBuilder, PIOExt, PinDir, PinState, ShiftDirection},
+    pio::PIOExt,
 };
 
 const XOSC_HZ: u32 = 12_000_000;
 const PIO_HZ: u32 = 1_000_000;
 const COMMAND_BUFFER_CAPACITY: usize = 32;
-const TX_FIFO_CAPACITY: usize = 8;
 const SUPERVISION_TIMEOUT_US: u64 = 3_000_000;
-
-const IRQ_END: u8 = 1 << 0;
-const IRQ_INVALID_COMMAND: u8 = 1 << 1;
 
 #[unsafe(link_section = ".start_block")]
 #[used]
@@ -109,13 +108,7 @@ fn main() -> ! {
         select_program("step_dir")
     );
     let installed = pio.install(&program.program).unwrap();
-    let (mut sm, _rx, mut tx) = PIOBuilder::from_installed_program(installed)
-        .out_pins(output_gpios[0], output_gpios.len() as u8)
-        .out_shift_direction(ShiftDirection::Right)
-        .autopull(false)
-        .clock_divisor_fixed_point(divisor, 0)
-        .buffers(Buffers::OnlyTx)
-        .build(sm0);
+    let mut executor = CpuExecutor::new(sm0, installed, output_gpios, divisor);
 
     let points = [
         JointAngles::new(0.0, 0.0).unwrap(),
@@ -141,19 +134,6 @@ fn main() -> ! {
         second_positive_is_high: true,
     };
 
-    let initial_levels = config.initial_levels();
-    assert_eq!(initial_levels, 0b1000);
-    sm.set_pins(output_gpios.map(|pin| {
-        let bit = pin - output_gpios[0];
-        let state = if initial_levels & (1 << bit) != 0 {
-            PinState::High
-        } else {
-            PinState::Low
-        };
-        (pin, state)
-    }));
-    sm.set_pindirs(output_gpios.map(|pin| (pin, PinDir::Output)));
-
     let mut boundaries = [0; 3];
     let mut operations = [PinOperationBatch::new(0); 8];
     let commands = build_verified_pio_commands(
@@ -176,65 +156,32 @@ fn main() -> ! {
     }
     let commands = &command_buffer[..command_count];
     assert!(command_count > TX_FIFO_CAPACITY);
-    assert_eq!(commands.last(), Some(&PioCommandWord::END));
-    assert!(
-        commands[..command_count - 1]
-            .iter()
-            .all(|command| !command.is_end())
-    );
 
-    let mut next_command = 0;
-    while next_command < commands.len() && next_command < TX_FIFO_CAPACITY {
-        assert!(
-            tx.write(commands[next_command].bits()),
-            "la FIFO TX no admitió la precarga"
+    for iteration in 0..3 {
+        let (returned_executor, result) = executor.execute(
+            &mut pio,
+            &timer,
+            commands,
+            config.initial_levels(),
+            SUPERVISION_TIMEOUT_US,
         );
-        next_command += 1;
-    }
+        executor = returned_executor;
 
-    pio.clear_irq(IRQ_END | IRQ_INVALID_COMMAND);
-    tx.clear_stalled_flag();
-    let started_at = timer.get_counter().ticks();
-    let sm = sm.start();
-
-    let result = loop {
-        let irqs = pio.get_irq_raw();
-        // TXSTALL se conserva incluso si PIO ya alcanzó IRQ_END.
-        if tx.has_stalled() {
-            break Err("la FIFO TX se agotó durante la ejecución");
-        }
-        if irqs & IRQ_INVALID_COMMAND != 0 {
-            break Err("PIO recibió una instrucción de control inválida");
-        }
-        if irqs & IRQ_END != 0 {
-            if next_command != commands.len() {
-                break Err("PIO informó la finalización antes de transferir todas las palabras");
+        match result {
+            Ok(()) => defmt::info!("Ejecución {} completada", iteration + 1),
+            Err(error) => {
+                defmt::error!(
+                    "Fallo de la prueba STEP/DIR: {:?}",
+                    defmt::Debug2Format(&error)
+                );
+                loop {
+                    cortex_m::asm::wfi();
+                }
             }
-            break Ok(());
-        }
-        if timer.get_counter().ticks().wrapping_sub(started_at) >= SUPERVISION_TIMEOUT_US {
-            break Err("PIO no informó la finalización dentro del tiempo límite");
-        }
-        if next_command < commands.len() && tx.write(commands[next_command].bits()) {
-            next_command += 1;
-        }
-    };
-    let mut sm = sm.stop();
-
-    match result {
-        Ok(()) => {
-            led.set_high().unwrap();
-            defmt::info!("Secuencia STEP/DIR finalizada");
-        }
-        Err(reason) => {
-            sm.set_pins([
-                (output_gpios[0], PinState::Low),
-                (output_gpios[2], PinState::Low),
-            ]);
-            defmt::error!("Fallo de la prueba STEP/DIR: {=str}", reason);
         }
     }
 
+    led.set_high().unwrap();
     loop {
         cortex_m::asm::wfi();
     }

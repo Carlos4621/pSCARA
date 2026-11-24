@@ -1,0 +1,31 @@
+[package]
+name = "pico2-step-dir"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[[bin]]
+name = "pico2-step-dir"
+path = "src/main.rs"
+test = false
+bench = false
+
+[features]
+adafruit-feather-rp2350 = []
+
+[dependencies]
+executor = { path = "../../crates/executor" }
+cortex-m = "0.7"
+cortex-m-rt = "0.7"
+embedded-hal = "1"
+defmt = "1"
+defmt-rtt = "1"
+panic-probe = { version = "1", features = ["print-defmt"] }
+rp235x-hal = { version = "0.3", features = ["rt", "critical-section-impl", "binary-info"] }
+pio = "0.2"
+pio-proc = "0.2"
+
+[profile.release]
+debug = 2
+lto = "fat"
+opt-level = 2

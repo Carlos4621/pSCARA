@@ -4,7 +4,9 @@
 mod dma_executor;
 
 use defmt_rtt as _;
-use dma_executor::{DmaExecutor, ExecutionPoll, TX_FIFO_CAPACITY};
+use dma_executor::{
+    DmaExecutor, ExecutionPoll, ExecutionStatus, PioExecutionError, TX_FIFO_CAPACITY,
+};
 use embedded_hal::digital::OutputPin;
 use executor::{PioExecutionConfig, build_verified_pio_commands};
 use kinematics::JointAngles;
@@ -28,6 +30,7 @@ const XOSC_HZ: u32 = 12_000_000;
 const PIO_HZ: u32 = 1_000_000;
 const COMMAND_BUFFER_CAPACITY: usize = 32;
 const SUPERVISION_TIMEOUT_US: u64 = 3_000_000;
+const CANCEL_AFTER_US: u64 = 400_000;
 
 #[unsafe(link_section = ".start_block")]
 #[used]
@@ -160,6 +163,51 @@ fn main() -> ! {
     }
     let commands: &'static [u32] = &command_buffer[..command_count];
     assert!(command_count > TX_FIFO_CAPACITY);
+
+    let active = match executor.start(
+        &mut pio,
+        &timer,
+        commands,
+        config.initial_levels(),
+        SUPERVISION_TIMEOUT_US,
+    ) {
+        Ok(active) => active,
+        Err((_, error)) => panic!("no se pudo iniciar la precarga DMA: {error:?}"),
+    };
+    assert_eq!(active.status(), ExecutionStatus::Preloading);
+    assert_eq!(active.running_elapsed_us(&timer), None);
+    let (returned_executor, result) = active.cancel();
+    executor = returned_executor;
+    assert_eq!(result, Err(PioExecutionError::Cancelled));
+    defmt::info!("Cancelación durante precarga correcta");
+
+    let mut active = match executor.start(
+        &mut pio,
+        &timer,
+        commands,
+        config.initial_levels(),
+        SUPERVISION_TIMEOUT_US,
+    ) {
+        Ok(active) => active,
+        Err((_, error)) => panic!("no se pudo iniciar la ejecución DMA: {error:?}"),
+    };
+    let (returned_executor, result) = loop {
+        if active
+            .running_elapsed_us(&timer)
+            .is_some_and(|elapsed| elapsed >= CANCEL_AFTER_US)
+        {
+            assert_eq!(active.status(), ExecutionStatus::Running);
+            break active.cancel();
+        }
+
+        match active.poll(&mut pio, &timer) {
+            ExecutionPoll::Pending(next) => active = next,
+            ExecutionPoll::Finished { executor, result } => break (executor, result),
+        }
+    };
+    executor = returned_executor;
+    assert_eq!(result, Err(PioExecutionError::Cancelled));
+    defmt::info!("Cancelación durante movimiento correcta");
 
     for iteration in 0..3 {
         let mut active = match executor.start(

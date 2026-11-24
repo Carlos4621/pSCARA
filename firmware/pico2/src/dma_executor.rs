@@ -30,6 +30,7 @@ pub enum PioExecutionError {
     Timeout,
     DmaIncomplete,
     DmaBusError,
+    Cancelled,
 }
 
 pub struct DmaExecutor {
@@ -51,7 +52,13 @@ enum ExecutionPhase {
     },
 }
 
-/// Posee la máquina PIO y el canal DMA hasta que `poll` devuelve los recursos.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExecutionStatus {
+    Preloading,
+    Running,
+}
+
+/// Posee la máquina PIO y el canal DMA hasta finalizar o cancelar la ejecución.
 #[must_use]
 pub struct ActiveDmaExecution {
     phase: ExecutionPhase,
@@ -215,6 +222,28 @@ impl DmaExecutor {
 }
 
 impl ActiveDmaExecution {
+    pub fn status(&self) -> ExecutionStatus {
+        match &self.phase {
+            ExecutionPhase::Preloading { .. } => ExecutionStatus::Preloading,
+            ExecutionPhase::Running { .. } => ExecutionStatus::Running,
+        }
+    }
+
+    pub fn running_elapsed_us(&self, timer: &Timer<CopyableTimer0>) -> Option<u64> {
+        match &self.phase {
+            ExecutionPhase::Preloading { .. } => None,
+            ExecutionPhase::Running { started_at, .. } => {
+                Some(timer.get_counter().ticks().wrapping_sub(*started_at))
+            }
+        }
+    }
+
+    /// Cancela la ejecución y recupera los recursos.
+    /// La posición mecánica resultante no está garantizada.
+    pub fn cancel(self) -> (DmaExecutor, Result<(), PioExecutionError>) {
+        self.finalize(Err(PioExecutionError::Cancelled))
+    }
+
     /// Consulta el estado y devuelve el control mientras la ejecución sigue activa.
     pub fn poll(mut self, pio: &mut PIO<PIO0>, timer: &Timer<CopyableTimer0>) -> ExecutionPoll {
         let now = timer.get_counter().ticks();
@@ -257,7 +286,15 @@ impl ActiveDmaExecution {
         ExecutionPoll::Pending(self)
     }
 
-    fn finish(self, mut result: Result<(), PioExecutionError>) -> ExecutionPoll {
+    fn finish(self, result: Result<(), PioExecutionError>) -> ExecutionPoll {
+        let (executor, result) = self.finalize(result);
+        ExecutionPoll::Finished { executor, result }
+    }
+
+    fn finalize(
+        self,
+        mut result: Result<(), PioExecutionError>,
+    ) -> (DmaExecutor, Result<(), PioExecutionError>) {
         let Self {
             phase,
             transfer,
@@ -313,8 +350,8 @@ impl ActiveDmaExecution {
         sm.clear_fifos();
         let (sm, program) = sm.uninit(rx, tx);
 
-        ExecutionPoll::Finished {
-            executor: DmaExecutor {
+        (
+            DmaExecutor {
                 sm,
                 program,
                 dma_channel,
@@ -322,6 +359,6 @@ impl ActiveDmaExecution {
                 clock_divisor,
             },
             result,
-        }
+        )
     }
 }

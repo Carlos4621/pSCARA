@@ -58,20 +58,25 @@ impl DmaPairTransfer {
         buffer_b: DmaCommandBuffer,
         tx: StepDirTx,
     ) -> Self {
+        let end = PioCommandWord::END.bits();
         assert!(!buffer_a.is_empty());
-        assert!(!buffer_b.is_empty());
+        let single_block = buffer_a.as_slice().last() == Some(&end);
+        assert_eq!(single_block, buffer_b.is_empty());
+        let final_queued = single_block || buffer_b.as_slice().last() == Some(&end);
+
         assert!(!channel_busy(&channel_a));
         assert!(!channel_busy(&channel_b));
-        let end = PioCommandWord::END.bits();
-        assert!(!buffer_a.as_slice().contains(&end));
-        let final_queued = buffer_b.as_slice().last() == Some(&end);
         clear_channel_completion(channel_a.id());
         clear_channel_completion(channel_b.id());
 
         // Elegir el propio canal en CHAIN_TO deshabilita el encadenamiento.
-        let last_channel = channel_b.id();
-        configure_channel(&channel_b, &buffer_b, &tx, last_channel);
-        configure_channel(&channel_a, &buffer_a, &tx, last_channel);
+        if single_block {
+            disable_channel(&channel_b);
+            configure_channel(&channel_a, &buffer_a, &tx, channel_a.id());
+        } else {
+            configure_channel(&channel_b, &buffer_b, &tx, channel_b.id());
+            configure_channel(&channel_a, &buffer_a, &tx, channel_b.id());
+        }
 
         compiler_fence(Ordering::SeqCst);
         cortex_m::asm::dsb();
@@ -91,39 +96,20 @@ impl DmaPairTransfer {
             tx,
             next_to_refill: DmaSlot::A,
             final_queued,
-            blocks_queued: 2,
+            blocks_queued: if single_block { 1 } else { 2 },
         }
     }
 
-    pub fn channel_a_busy(&self) -> bool {
+    fn channel_a_busy(&self) -> bool {
         channel_busy(&self.channel_a)
     }
 
-    pub fn channel_b_busy(&self) -> bool {
+    fn channel_b_busy(&self) -> bool {
         channel_busy(&self.channel_b)
     }
 
-    pub fn remaining_words(&self) -> [u32; 2] {
-        [
-            remaining_words(&self.channel_a, &self.buffer_a),
-            remaining_words(&self.channel_b, &self.buffer_b),
-        ]
-    }
-
     pub fn has_bus_error(&self) -> bool {
-        self.channel_a
-            .ch()
-            .ch_ctrl_trig()
-            .read()
-            .ahb_error()
-            .bit_is_set()
-            || self
-                .channel_b
-                .ch()
-                .ch_ctrl_trig()
-                .read()
-                .ahb_error()
-                .bit_is_set()
+        channel_has_bus_error(&self.channel_a) || channel_has_bus_error(&self.channel_b)
     }
 
     pub fn blocks_queued(&self) -> usize {
@@ -134,11 +120,11 @@ impl DmaPairTransfer {
         self.final_queued
     }
 
-    /// Indica que el bloque final y su antecesor ya se transfirieron a la FIFO.
+    /// Indica que todos los bloques ya se transfirieron a la FIFO.
     pub fn is_done(&self) -> bool {
         self.final_queued
             && channel_completed(self.channel_a.id())
-            && channel_completed(self.channel_b.id())
+            && (self.blocks_queued == 1 || channel_completed(self.channel_b.id()))
             && !self.channel_a_busy()
             && !self.channel_b_busy()
             && !self.has_bus_error()
@@ -212,6 +198,10 @@ impl DmaPairTransfer {
         }
 
         let bus_error = self.has_bus_error();
+        if bus_error {
+            clear_channel_errors(&self.channel_a);
+            clear_channel_errors(&self.channel_b);
+        }
         dma.intr()
             .write(|w| unsafe { w.bits(u32::from(CHANNEL_MASK)) });
         cortex_m::asm::dsb();
@@ -245,13 +235,28 @@ fn channel_busy<C: SingleChannel>(channel: &C) -> bool {
     channel.ch().ch_ctrl_trig().read().busy().bit_is_set()
 }
 
-fn set_chain_to<C: SingleChannel>(channel: &C, next_channel: u8) {
-    // SAFETY: el índice corresponde al otro canal del par. AL1_CTRL no
-    // dispara DMA y modify conserva los indicadores W1C de error.
-    channel
-        .ch()
+fn channel_has_bus_error<C: SingleChannel>(channel: &C) -> bool {
+    channel.ch().ch_ctrl_trig().read().ahb_error().bit_is_set()
+}
+
+fn publish_chain<C: SingleChannel>(channel: &C, next_channel: u8) -> Result<(), RefillError> {
+    let registers = channel.ch();
+    // El PAC enmascara READ_ERROR y WRITE_ERROR (W1C) durante modify.
+    registers.ch_al1_ctrl().modify(|_, w| w.en().clear_bit());
+    cortex_m::asm::dsb();
+
+    if channel_has_bus_error(channel) {
+        return Err(RefillError::DmaBusError);
+    }
+    if !channel_busy(channel) || channel_completed(channel.id()) {
+        return Err(RefillError::DeadlineMissed);
+    }
+
+    // SAFETY: el índice corresponde al otro canal del par, ya configurado.
+    registers
         .ch_al1_ctrl()
-        .modify(|_, w| unsafe { w.chain_to().bits(next_channel) });
+        .modify(|_, w| unsafe { w.chain_to().bits(next_channel).en().set_bit() });
+    Ok(())
 }
 
 fn refill_channel<C, P, I>(
@@ -283,21 +288,12 @@ where
         .map_err(RefillError::Source)?
         .ok_or(RefillError::MissingBlock)?;
 
-    if channel_completed(previous.id()) {
-        return Err(RefillError::DeadlineMissed);
-    }
     clear_channel_completion(channel.id());
     configure_channel(channel, buffer, tx, channel.id());
 
     compiler_fence(Ordering::SeqCst);
     cortex_m::asm::dsb();
-    if channel_completed(previous.id()) {
-        return Err(RefillError::DeadlineMissed);
-    }
-
-    // El destino ya contiene el bloque nuevo y su encadenamiento está deshabilitado.
-    // Si se pierde el disparo por un relevo tardío, PIO lo detectará con TXSTALL.
-    set_chain_to(previous, channel.id());
+    publish_chain(previous, channel.id())?;
     Ok(Some(block))
 }
 
@@ -323,10 +319,6 @@ fn configure_channel<C: SingleChannel>(
             .bits(chain_to)
             .bswap()
             .clear_bit()
-            .read_error()
-            .clear_bit_by_one()
-            .write_error()
-            .clear_bit_by_one()
             .en()
             .set_bit()
     });
@@ -343,15 +335,14 @@ fn configure_channel<C: SingleChannel>(
         .write(|w| unsafe { w.count().bits(buffer.len() as u32).mode().normal() });
 }
 
-fn remaining_words<C: SingleChannel>(channel: &C, buffer: &DmaCommandBuffer) -> u32 {
-    let registers = channel.ch();
-    // TRANS_COUNT escribe la recarga, pero al leer devuelve el conteo activo.
-    // Si la dirección no ha avanzado, el bloque entero sigue pendiente.
-    if registers.ch_read_addr().read().bits() == buffer.as_slice().as_ptr() as u32 {
-        buffer.len() as u32
-    } else {
-        registers.ch_trans_count().read().count().bits()
-    }
+fn clear_channel_errors<C: SingleChannel>(channel: &C) {
+    // Reconocer los errores después de detener el canal y registrar su estado.
+    channel.ch().ch_al1_ctrl().modify(|_, w| {
+        w.read_error()
+            .clear_bit_by_one()
+            .write_error()
+            .clear_bit_by_one()
+    });
 }
 
 fn disable_channel<C: SingleChannel>(channel: &C) {

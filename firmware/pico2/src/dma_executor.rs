@@ -45,7 +45,7 @@ pub struct DmaExecutor {
     clock_divisor: u16,
 }
 
-enum ExecutionPhase {
+pub(super) enum ExecutionPhase {
     Preloading {
         sm: StateMachine<StepDirSM, Stopped>,
         started_at: u64,
@@ -60,6 +60,24 @@ enum ExecutionPhase {
 pub enum ExecutionStatus {
     Preloading,
     Running,
+}
+
+impl ExecutionPhase {
+    pub(super) fn status(&self) -> ExecutionStatus {
+        match self {
+            Self::Preloading { .. } => ExecutionStatus::Preloading,
+            Self::Running { .. } => ExecutionStatus::Running,
+        }
+    }
+
+    pub(super) fn running_elapsed_us(&self, timer: &Timer<CopyableTimer0>) -> Option<u64> {
+        match self {
+            Self::Preloading { .. } => None,
+            Self::Running { started_at, .. } => {
+                Some(timer.get_counter().ticks().wrapping_sub(*started_at))
+            }
+        }
+    }
 }
 
 /// Posee la máquina PIO, el canal DMA y el búfer hasta finalizar o cancelar la ejecución.
@@ -86,6 +104,10 @@ pub enum ExecutionPoll {
 pub(super) fn pio_has_stalled() -> bool {
     // SAFETY: lectura volátil de FDEBUG de PIO0 sin efectos laterales.
     unsafe { (&*pac::PIO0::ptr()).fdebug().read().txstall().bits() & 1 != 0 }
+}
+
+pub(super) fn valid_initial_levels(levels: u8) -> bool {
+    levels & !LEVEL_MASK == 0 && levels & STEP_MASK == 0
 }
 
 fn dma_has_bus_error() -> bool {
@@ -119,7 +141,7 @@ impl DmaExecutor {
     }
 
     fn validate(commands: &[u32], initial_levels: u8) -> Result<(), PioExecutionError> {
-        if initial_levels & !LEVEL_MASK != 0 || initial_levels & STEP_MASK != 0 {
+        if !valid_initial_levels(initial_levels) {
             return Err(PioExecutionError::InvalidInitialLevels);
         }
 
@@ -231,19 +253,11 @@ impl DmaExecutor {
 
 impl ActiveDmaExecution {
     pub fn status(&self) -> ExecutionStatus {
-        match &self.phase {
-            ExecutionPhase::Preloading { .. } => ExecutionStatus::Preloading,
-            ExecutionPhase::Running { .. } => ExecutionStatus::Running,
-        }
+        self.phase.status()
     }
 
     pub fn running_elapsed_us(&self, timer: &Timer<CopyableTimer0>) -> Option<u64> {
-        match &self.phase {
-            ExecutionPhase::Preloading { .. } => None,
-            ExecutionPhase::Running { started_at, .. } => {
-                Some(timer.get_counter().ticks().wrapping_sub(*started_at))
-            }
-        }
+        self.phase.running_elapsed_us(timer)
     }
 
     /// Cancela la ejecución y recupera los recursos y el búfer.

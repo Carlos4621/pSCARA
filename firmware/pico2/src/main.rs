@@ -4,21 +4,17 @@
 mod dma_command_buffer;
 #[allow(
     dead_code,
-    reason = "la prueba de banco configura el par DMA directamente"
+    reason = "la prueba de banco usa el ejecutor DMA por bloques"
 )]
 mod dma_executor;
 mod dma_pair;
+mod streaming_dma_executor;
 
 use defmt_rtt as _;
 use dma_command_buffer::DmaCommandBuffer;
-use dma_executor::{
-    IRQ_END, IRQ_INVALID_COMMAND, PRELOAD_TIMEOUT_US, PioExecutionError, pio_has_stalled,
-};
-use dma_pair::{DmaPairResources, DmaPairTransfer};
+use dma_executor::{ExecutionStatus, PioExecutionError};
 use embedded_hal::{delay::DelayNs, digital::OutputPin};
-use executor::{
-    PioCommandBlock, PioCommandBlockReader, PioExecutionConfig, build_verified_pio_commands,
-};
+use executor::{ExecutorError, PioCommandWord, PioExecutionConfig, build_verified_pio_commands};
 use kinematics::JointAngles;
 use panic_probe as _;
 use planner::{
@@ -33,14 +29,17 @@ use rp235x_hal::{
     entry,
     gpio::{FunctionPio0, PinState as GpioPinState},
     pac::{self, PIO0},
-    pio::{Buffers, PIO, PIOBuilder, PIOExt, PinDir, PinState, ShiftDirection},
+    pio::{PIO, PIOExt},
     timer::{CopyableTimer0, Timer},
 };
+use streaming_dma_executor::{ActiveStreamingExecution, StreamingDmaExecutor, StreamingPoll};
 
 const XOSC_HZ: u32 = 12_000_000;
 const PIO_HZ: u32 = 1_000_000;
 const BLOCK_CAPACITY: usize = 5;
 const SUPERVISION_TIMEOUT_US: u64 = 6_000_000;
+const SHORT_TIMEOUT_US: u64 = 1_000;
+const PRELOAD_CANCEL_DELAY_US: u32 = 100;
 const BENCH_SEPARATION_MS: u32 = 1_000;
 
 #[unsafe(link_section = ".start_block")]
@@ -120,14 +119,26 @@ fn main() -> ! {
     step_2.set_input_enable(true);
     let step_masks = [1u32 << output_gpios[0], 1u32 << output_gpios[2]];
 
-    let (mut pio, mut sm0, _, _, _) = pac.PIO0.split(&mut pac.RESETS);
+    let (mut pio, sm0, _, _, _) = pac.PIO0.split(&mut pac.RESETS);
     let program = pio_proc::pio_file!(
         "../../crates/executor/pio/step_dir.pio",
         select_program("step_dir")
     );
-    let mut installed = pio.install(&program.program).unwrap();
+    let installed = pio.install(&program.program).unwrap();
     let dma = pac.DMA.split(&mut pac.RESETS);
-    let (mut channel_a, mut channel_b) = (dma.ch0, dma.ch1);
+    let storage_a = cortex_m::singleton!(: [u32; BLOCK_CAPACITY] = [0; BLOCK_CAPACITY]).unwrap();
+    let storage_b = cortex_m::singleton!(: [u32; BLOCK_CAPACITY] = [0; BLOCK_CAPACITY]).unwrap();
+    let mut executor = StreamingDmaExecutor::new(
+        sm0,
+        installed,
+        dma.ch0,
+        dma.ch1,
+        DmaCommandBuffer::new(storage_a),
+        DmaCommandBuffer::new(storage_b),
+        output_gpios,
+        divisor,
+    );
+
     let points = [
         JointAngles::new(0.0, 0.0).unwrap(),
         JointAngles::new(0.25, -0.25).unwrap(),
@@ -149,19 +160,33 @@ fn main() -> ! {
     let acceleration_limits = JointAccelerationLimits::new(1.0, 1.0).unwrap();
     let speeds = [0.0; 5];
     let converter = JointToStepsConverter::new(8.0, 4.0).unwrap();
-    let storage_a = cortex_m::singleton!(: [u32; BLOCK_CAPACITY] = [0; BLOCK_CAPACITY]).unwrap();
-    let storage_b = cortex_m::singleton!(: [u32; BLOCK_CAPACITY] = [0; BLOCK_CAPACITY]).unwrap();
-    let mut buffer_a = DmaCommandBuffer::new(storage_a);
-    let mut buffer_b = DmaCommandBuffer::new(storage_b);
-    let step_pins_low = [
-        (output_gpios[0], PinState::Low),
-        (output_gpios[2], PinState::Low),
-    ];
-    let step_mask = step_masks[0] | step_masks[1];
 
-    for (trajectory, expected_blocks, expected_steps) in
-        [(&points[..3], 3, [4, 2]), (&points[..], 5, [8, 4])]
-    {
+    for (trajectory, case) in [
+        (&points[..3], BenchCase::CancelPreloading),
+        (&points[..3], BenchCase::CancelOnFirstStep),
+        (&points[..3], BenchCase::Timeout),
+        (
+            &points[..2],
+            BenchCase::Complete {
+                blocks: 2,
+                steps: [2, 1],
+            },
+        ),
+        (
+            &points[..3],
+            BenchCase::Complete {
+                blocks: 3,
+                steps: [4, 2],
+            },
+        ),
+        (
+            &points[..],
+            BenchCase::Complete {
+                blocks: 5,
+                steps: [8, 4],
+            },
+        ),
+    ] {
         let path = CoordinatedJointPathProfiles::new(
             trajectory,
             &speeds[..trajectory.len()],
@@ -180,144 +205,43 @@ fn main() -> ! {
             &mut operations,
         )
         .expect("no se pudieron verificar las palabras PIO");
-        let mut reader = PioCommandBlockReader::new(commands);
-        let first_block = Ok(Some(PioCommandBlock {
-            len: BLOCK_CAPACITY,
-            is_final: false,
-        }));
-        assert_eq!(buffer_a.fill_from(&mut reader), first_block);
-        assert_eq!(buffer_b.fill_from(&mut reader), first_block);
-        assert!(!reader.is_finished());
-
-        let (mut sm, rx, tx) = PIOBuilder::from_installed_program(installed)
-            .out_pins(output_gpios[0], output_gpios.len() as u8)
-            .out_shift_direction(ShiftDirection::Right)
-            .autopull(false)
-            .clock_divisor_fixed_point(divisor, 0)
-            .buffers(Buffers::OnlyTx)
-            .build(sm0);
-
-        let initial_levels = config.initial_levels();
-        sm.set_pins(output_gpios.into_iter().enumerate().map(|(bit, pin)| {
-            let state = if initial_levels & (1 << bit) != 0 {
-                PinState::High
-            } else {
-                PinState::Low
-            };
-            (pin, state)
-        }));
-        sm.set_pindirs(output_gpios.map(|pin| (pin, PinDir::Output)));
-        sm.clear_fifos();
-        pio.clear_irq(IRQ_END | IRQ_INVALID_COMMAND);
-        tx.clear_stalled_flag();
-
-        let transfer = DmaPairTransfer::start(channel_a, channel_b, buffer_a, buffer_b, tx);
-        let mut transfer = if expected_blocks == 3 {
-            // Se aborta con CH1 activo y la FIFO llena, todavía con PIO detenido.
-            let preload_result = wait_for_preload(&transfer, &pio, &timer);
-            let reached_channel_b = !transfer.channel_a_busy() && transfer.channel_b_busy();
-            let remaining_at_abort = transfer.remaining_words();
-            sm.set_pins(step_pins_low);
-            let DmaPairResources {
-                channel_a,
-                channel_b,
-                buffer_a,
-                buffer_b,
-                tx,
-                completed,
-                bus_error,
-            } = transfer.stop();
-            let preload_stalled = tx.has_stalled();
-            sm.clear_fifos();
-            assert_eq!(preload_result, Ok(()));
-            assert!(reached_channel_b);
-            assert_eq!(remaining_at_abort, [0, 2]);
-            assert!(!completed && !bus_error && !preload_stalled);
-            assert_eq!(hal::Sio::read_bank0() & step_mask, 0);
-            defmt::info!("Precarga cancelada con CH1 activo");
-
-            pio.clear_irq(IRQ_END | IRQ_INVALID_COMMAND);
-            tx.clear_stalled_flag();
-            DmaPairTransfer::start(channel_a, channel_b, buffer_a, buffer_b, tx)
+        let timeout_us = if matches!(case, BenchCase::Timeout) {
+            SHORT_TIMEOUT_US
         } else {
-            transfer
+            SUPERVISION_TIMEOUT_US
         };
-
-        let preload_result = wait_for_preload(&transfer, &pio, &timer);
-        let mut observed_steps = [0u32; 2];
-        let (mut sm, result) = if preload_result.is_ok() {
-            let mut previous = hal::Sio::read_bank0();
-            let started_at = timer.get_counter().ticks();
-            let running_sm = sm.start();
-            let result = loop {
-                let pins = hal::Sio::read_bank0();
-                let rising = pins & !previous;
-                previous = pins;
-                for (steps, mask) in observed_steps.iter_mut().zip(step_masks) {
-                    *steps += u32::from(rising & mask != 0);
-                }
-
-                if transfer.has_bus_error() {
-                    break Err(PioExecutionError::DmaBusError);
-                }
-                if pio_has_stalled() {
-                    break Err(PioExecutionError::FifoUnderrun);
-                }
-                let irqs = pio.get_irq_raw();
-                if irqs & IRQ_INVALID_COMMAND != 0 {
-                    break Err(PioExecutionError::InvalidCommand);
-                }
-                if irqs & IRQ_END != 0 && transfer.is_done() {
-                    break Ok(());
-                }
-                if timer.get_counter().ticks().wrapping_sub(started_at) >= SUPERVISION_TIMEOUT_US {
-                    break Err(PioExecutionError::Timeout);
-                }
-                if let Err(error) = transfer.refill_next(&mut reader) {
-                    break Err(PioExecutionError::BlockRefill(error));
-                }
-            };
-            (running_sm.stop(), result)
-        } else {
-            (sm, preload_result)
-        };
-
-        sm.set_pins(step_pins_low);
-        let blocks_queued = transfer.blocks_queued();
-        let final_queued = transfer.final_queued();
-        let DmaPairResources {
-            channel_a: recovered_a,
-            channel_b: recovered_b,
-            buffer_a: recovered_buffer_a,
-            buffer_b: recovered_buffer_b,
-            tx,
-            completed,
-            bus_error,
-        } = transfer.stop();
-        let fifo_empty = tx.is_empty();
-        let stalled = tx.has_stalled();
-        sm.clear_fifos();
-        (sm0, installed) = sm.uninit(rx, tx);
-        channel_a = recovered_a;
-        channel_b = recovered_b;
-        buffer_a = recovered_buffer_a;
-        buffer_b = recovered_buffer_b;
-
-        assert_eq!(result, Ok(()));
-        assert!(completed && !bus_error);
-        assert!(fifo_empty && !stalled);
-        assert_eq!(buffer_a.capacity(), BLOCK_CAPACITY);
-        assert_eq!(buffer_b.capacity(), BLOCK_CAPACITY);
-        assert_eq!(blocks_queued, expected_blocks);
-        assert!(final_queued && reader.is_finished());
-        assert_eq!(observed_steps, expected_steps);
-        assert_eq!(hal::Sio::read_bank0() & step_mask, 0);
-        defmt::info!("Ejecución de {} bloques verificada", blocks_queued);
-
-        if expected_blocks == 3 {
-            timer.delay_ms(BENCH_SEPARATION_MS);
-        }
+        let active = executor
+            .start(
+                &mut pio,
+                &timer,
+                commands,
+                config.initial_levels(),
+                timeout_us,
+            )
+            .unwrap_or_else(|(_, error)| panic!("Error de inicio: {error:?}"));
+        executor = check_bench_execution(active, &mut pio, &mut timer, step_masks, case);
+        timer.delay_ms(BENCH_SEPARATION_MS);
     }
+
+    let active = executor
+        .start(
+            &mut pio,
+            &timer,
+            core::iter::once(Ok(PioCommandWord::END)),
+            config.initial_levels(),
+            SUPERVISION_TIMEOUT_US,
+        )
+        .unwrap_or_else(|(_, error)| panic!("Error de inicio: {error:?}"));
+    let _executor = check_bench_execution(
+        active,
+        &mut pio,
+        &mut timer,
+        step_masks,
+        BenchCase::Complete {
+            blocks: 1,
+            steps: [0, 0],
+        },
+    );
 
     led.set_high().unwrap();
     loop {
@@ -325,21 +249,80 @@ fn main() -> ! {
     }
 }
 
-fn wait_for_preload(
-    transfer: &DmaPairTransfer,
-    pio: &PIO<PIO0>,
-    timer: &Timer<CopyableTimer0>,
-) -> Result<(), PioExecutionError> {
-    let started_at = timer.get_counter().ticks();
-    loop {
-        if transfer.has_bus_error() {
-            return Err(PioExecutionError::DmaBusError);
+enum BenchCase {
+    CancelPreloading,
+    CancelOnFirstStep,
+    Timeout,
+    Complete { blocks: usize, steps: [u32; 2] },
+}
+
+fn check_bench_execution<I>(
+    mut active: ActiveStreamingExecution<I>,
+    pio: &mut PIO<PIO0>,
+    timer: &mut Timer<CopyableTimer0>,
+    step_masks: [u32; 2],
+    case: BenchCase,
+) -> StreamingDmaExecutor
+where
+    I: Iterator<Item = Result<PioCommandWord, ExecutorError>>,
+{
+    assert_eq!(active.status(), ExecutionStatus::Preloading);
+    assert_eq!(active.running_elapsed_us(timer), None);
+    let step_mask = step_masks[0] | step_masks[1];
+    let mut observed_steps = [0; 2];
+    let (executor, report) = if matches!(case, BenchCase::CancelPreloading) {
+        // Dar tiempo a DMA para llenar la FIFO mientras la máquina PIO sigue detenida.
+        timer.delay_us(PRELOAD_CANCEL_DELAY_US);
+        assert_eq!(hal::Sio::read_bank0() & step_mask, 0);
+        active.cancel()
+    } else {
+        let mut previous = hal::Sio::read_bank0();
+        loop {
+            let pins = hal::Sio::read_bank0();
+            let rising = pins & !previous;
+            previous = pins;
+            for (count, mask) in observed_steps.iter_mut().zip(step_masks) {
+                *count += u32::from(rising & mask != 0);
+            }
+
+            if matches!(case, BenchCase::CancelOnFirstStep) && rising & step_mask != 0 {
+                assert_eq!(active.status(), ExecutionStatus::Running);
+                assert!(active.running_elapsed_us(timer).is_some());
+                break active.cancel();
+            }
+
+            match active.poll(pio, timer) {
+                StreamingPoll::Pending(next) => active = next,
+                StreamingPoll::Finished { executor, report } => break (executor, report),
+            }
         }
-        if transfer.is_done() || !pio.irq0().raw().sm0_tx_not_full() {
-            return Ok(());
+    };
+
+    assert_eq!(hal::Sio::read_bank0() & step_mask, 0);
+    match case {
+        BenchCase::CancelPreloading => {
+            assert_eq!(report.result, Err(PioExecutionError::Cancelled));
+            assert_eq!(report.blocks_queued, 2);
+            assert!(!report.final_queued);
+            defmt::info!("Cancelación durante la precarga verificada");
         }
-        if timer.get_counter().ticks().wrapping_sub(started_at) >= PRELOAD_TIMEOUT_US {
-            return Err(PioExecutionError::PreloadFailed);
+        BenchCase::CancelOnFirstStep => {
+            assert_eq!(report.result, Err(PioExecutionError::Cancelled));
+            assert_ne!(observed_steps, [0, 0]);
+            defmt::info!("Cancelación durante el movimiento verificada");
+        }
+        BenchCase::Timeout => {
+            assert_eq!(report.result, Err(PioExecutionError::Timeout));
+            assert_eq!(observed_steps, [0, 0]);
+            defmt::info!("Tiempo límite insuficiente verificado");
+        }
+        BenchCase::Complete { blocks, steps } => {
+            assert_eq!(report.result, Ok(()));
+            assert!(report.final_queued);
+            assert_eq!(report.blocks_queued, blocks);
+            assert_eq!(observed_steps, steps);
+            defmt::info!("Ejecución de {} bloques verificada", report.blocks_queued);
         }
     }
+    executor
 }

@@ -67,6 +67,36 @@ fn ratio_parts_reference(numerators: &[f64], denominators: &[f64]) -> (f64, i32)
 }
 
 pub(crate) fn product_ratio(numerators: &[f64], denominators: &[f64]) -> f64 {
+    match (numerators, denominators) {
+        ([a, b], []) if is_fast_factor(*a) && is_fast_factor(*b) => *a * *b,
+        ([a, b, c], [divisor])
+            if *divisor == 2.0
+                && *a != 2.0
+                && *b != 2.0
+                && *c != 2.0
+                && is_fast_factor(*a)
+                && is_fast_factor(*b)
+                && is_fast_factor(*c) =>
+        {
+            ((*a * *b) * *c) * 0.5
+        }
+        _ => product_ratio_reference(numerators, denominators),
+    }
+}
+
+#[inline]
+fn is_fast_factor(value: f64) -> bool {
+    let magnitude = value.to_bits() & 0x7fff_ffff_ffff_ffff;
+    if magnitude == 0 {
+        return true;
+    }
+
+    // Exponents from -200 through 200 keep nonzero intermediates normal.
+    let exponent = magnitude >> 52;
+    (823..=1223).contains(&exponent)
+}
+
+fn product_ratio_reference(numerators: &[f64], denominators: &[f64]) -> f64 {
     let (fraction, exponent) = ratio_parts(numerators, denominators);
     libm::scalbn(fraction, exponent)
 }

@@ -30,7 +30,6 @@ pub struct MotionProfile {
     deceleration_time: f64,
 
     total_time: f64,
-    acceleration_distance: f64,
 }
 
 impl MotionProfile {
@@ -156,7 +155,7 @@ impl MotionProfile {
             return Err(PlannerError::NumericalFailure);
         }
 
-        let mut profile = Self {
+        Ok(Self {
             start_angle,
             end_angle,
             angular_displacement,
@@ -169,19 +168,7 @@ impl MotionProfile {
             cruise_time,
             deceleration_time,
             total_time,
-            acceleration_distance: 0.0,
-        };
-
-        if profile.cruise_time > 0.0 {
-            // Use the same ramp calculation as the scaled cruise query.
-            profile.acceleration_distance = profile.ramp_displacement(
-                profile.acceleration_time,
-                profile.total_time,
-                profile.initial_speed,
-            );
-        }
-
-        Ok(profile)
+        })
     }
 
     pub fn total_time(&self) -> f64 {
@@ -209,7 +196,9 @@ impl MotionProfile {
         let angle = match self.phase_at_unscaled(time) {
             MotionPhase::Acceleration => self.ramp_displacement_unscaled(time, self.initial_speed),
             MotionPhase::Cruise => {
-                self.acceleration_distance
+                let ramp_distance =
+                    self.ramp_displacement_unscaled(self.acceleration_time, self.initial_speed);
+                ramp_distance
                     + product_ratio(&[self.peak_velocity, time - self.acceleration_time], &[])
             }
             MotionPhase::Deceleration => {

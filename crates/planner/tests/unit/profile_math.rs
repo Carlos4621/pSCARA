@@ -4,6 +4,100 @@ fn power_of_two(exponent: i32) -> f64 {
     libm::scalbn(1.0, exponent)
 }
 
+fn assert_product_matches_reference(numerators: &[f64], denominators: &[f64]) {
+    assert_eq!(
+        product_ratio(numerators, denominators).to_bits(),
+        product_ratio_reference(numerators, denominators).to_bits(),
+        "numerators={numerators:?}, denominators={denominators:?}"
+    );
+}
+
+#[test]
+fn fast_factor_accepts_signed_zeros_and_the_intended_exponents() {
+    let minimum = power_of_two(-200);
+    let upper_bound = power_of_two(201);
+    for sign in [-1.0, 1.0] {
+        for value in [0.0, minimum, minimum.next_up(), upper_bound.next_down()] {
+            assert!(is_fast_factor(sign * value), "factor={}", sign * value);
+        }
+        for value in [
+            f64::from_bits(1),
+            f64::MIN_POSITIVE,
+            minimum.next_down(),
+            upper_bound,
+            f64::MAX,
+            f64::INFINITY,
+            f64::NAN,
+        ] {
+            assert!(!is_fast_factor(sign * value), "factor={}", sign * value);
+        }
+    }
+}
+
+#[test]
+fn fast_products_match_reference() {
+    let values = [
+        -f64::MAX,
+        -100.0,
+        -2.0,
+        -1.0,
+        -0.0,
+        0.0,
+        f64::from_bits(1),
+        f64::MIN_POSITIVE,
+        power_of_two(-201),
+        power_of_two(-200),
+        0.001,
+        0.1,
+        0.5,
+        1.0,
+        2.0,
+        3.0,
+        10.0,
+        100.0,
+        power_of_two(200),
+        power_of_two(201),
+        f64::MAX,
+    ];
+
+    for a in values {
+        for b in values {
+            assert_product_matches_reference(&[a, b], &[]);
+            for c in values {
+                assert_product_matches_reference(&[a, b, c], &[2.0]);
+            }
+        }
+    }
+}
+
+#[test]
+fn fast_products_match_reference_for_pseudorandom_factors() {
+    let mut state = 0xbb67_ae85_84ca_a73b_u64;
+    let mut next = || {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        state
+    };
+    let mut factor = |min_exponent: u64, max_exponent: u64| {
+        let exponent = min_exponent + next() % (max_exponent - min_exponent + 1);
+        let sign_and_fraction = next() & !(0x7ff_u64 << 52);
+        f64::from_bits(sign_and_fraction | (exponent << 52))
+    };
+
+    for _ in 0..8192 {
+        let a = factor(823, 1223);
+        let b = factor(823, 1223);
+        let c = factor(823, 1223);
+        assert_product_matches_reference(&[a, b], &[]);
+        assert_product_matches_reference(&[a, b, c], &[2.0]);
+
+        let wide = factor(0, 2046);
+        assert_product_matches_reference(&[wide, b], &[]);
+        assert_product_matches_reference(&[a, b, wide], &[2.0]);
+    }
+}
+
 fn assert_ratio_matches_reference(numerators: &[f64], denominators: &[f64]) {
     let (expected_fraction, expected_exponent) = ratio_parts_reference(numerators, denominators);
     let (fraction, exponent) = ratio_parts(numerators, denominators);

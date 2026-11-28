@@ -13,8 +13,11 @@ bench = false
 [features]
 adafruit-feather-rp2350 = []
 dcp-accelerated = ["rp235x-hal/dcp-fast-f64"]
+planner-stages-bench = []
 transition-estimation-bench = ["planner/transition-estimation"]
 transition-hinted = ["planner/transition-hinted"]
+transition-hinted-noinline = ["planner/transition-hinted-noinline"]
+transition-inverse-cache = ["planner/transition-inverse-cache"]
 wokwi-test = ["dep:scara-wokwi"]
 wokwi-pio-test = ["wokwi-test"]
 

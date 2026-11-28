@@ -11,6 +11,18 @@ fn timed_path<'a>(
     TimedCoordinatedJointPathProfiles::new(path).unwrap()
 }
 
+fn cached_span(sampler: &CachedTrajectoryPositionSampler<'_>) -> Option<(f64, f64)> {
+    let cached = sampler.cached_profile.as_ref()?;
+    #[cfg(feature = "transition-inverse-cache")]
+    {
+        Some((cached.profile.start_time(), cached.end_time))
+    }
+    #[cfg(not(feature = "transition-inverse-cache"))]
+    {
+        Some((cached.start_time(), sampler.cached_end_time))
+    }
+}
+
 fn assert_same_position(
     trajectory: CoordinatedJointTrajectory<'_>,
     sampler: &mut CachedTrajectoryPositionSampler<'_>,
@@ -71,18 +83,11 @@ fn a_shared_boundary_replaces_the_later_cached_profile_with_the_earlier_one() {
 
     for (earlier_start, boundary) in [(0.0, 2.0_f64), (2.0, 4.0_f64)] {
         assert_same_position(trajectory, &mut sampler, boundary.next_up());
-        assert_eq!(
-            sampler.cached_profile.as_ref().unwrap().start_time(),
-            boundary
-        );
+        assert_eq!(cached_span(&sampler).unwrap().0, boundary);
         // Es el mismo punto articular en ambos perfiles. También comprobamos
         // cuál queda en caché para detectar un inicio inclusivo por error.
         assert_same_position(trajectory, &mut sampler, boundary);
-        assert_eq!(
-            sampler.cached_profile.as_ref().unwrap().start_time(),
-            earlier_start
-        );
-        assert_eq!(sampler.cached_end_time, boundary);
+        assert_eq!(cached_span(&sampler), Some((earlier_start, boundary)));
     }
 }
 
@@ -109,8 +114,7 @@ fn invalid_times_preserve_the_profile_and_match_the_original_error() {
             PlannerError::InvalidTime
         );
         assert_same_position(trajectory, &mut sampler, time);
-        assert_eq!(sampler.cached_profile.as_ref().unwrap().start_time(), 2.0);
-        assert_eq!(sampler.cached_end_time, 4.0);
+        assert_eq!(cached_span(&sampler), Some((2.0, 4.0)));
     }
     assert_same_position(trajectory, &mut sampler, 3.5);
     assert_same_position(trajectory, &mut sampler, 1.5);
@@ -179,7 +183,7 @@ fn transition_estimates_require_the_cached_profile_to_cover_the_interval() {
         sampler.estimate_transition_tick(19, 21, initial, &converter, timebase),
         None
     );
-    assert_eq!(sampler.cached_end_time, 2.0);
+    assert_eq!(cached_span(&sampler), Some((0.0, 2.0)));
 
     let position = converter
         .convert(sampler.position_at_clamped(3.0).unwrap())
@@ -193,5 +197,40 @@ fn transition_estimates_require_the_cached_profile_to_cover_the_interval() {
             .estimate_transition_tick(30, 41, position, &converter, timebase)
             .is_some()
     );
-    assert_eq!(sampler.cached_end_time, 4.0);
+    assert_eq!(cached_span(&sampler), Some((2.0, 4.0)));
+}
+
+#[cfg(feature = "transition-inverse-cache")]
+#[test]
+fn replacing_the_profile_refreshes_estimates_across_segments_and_a_reversal() {
+    let points = [0.0, 1.0, 5.0, 0.0].map(|angle| JointAngles::new(angle, 0.0).unwrap());
+    let velocity = JointVelocityLimits::new(1.0, 1.0).unwrap();
+    let acceleration = JointAccelerationLimits::new(1.0, 1.0).unwrap();
+    let timed = timed_path(&points, &[0.0; 4], &velocity, &acceleration);
+    let trajectory = CoordinatedJointTrajectory::new(timed).unwrap();
+    let mut sampler = CachedTrajectoryPositionSampler::new(trajectory);
+    let converter = JointToStepsConverter::new(32.0, 32.0).unwrap();
+    let timebase = StepTimeBase::new(1000).unwrap();
+
+    for time in [1.0, 3.5, 8.05, 3.6, 0.5] {
+        let profile = trajectory.find_profile(time).unwrap();
+        let start_tick = timebase.seconds_to_ticks(time).unwrap();
+        let end_tick = timebase
+            .seconds_to_ticks(profile.end_time().unwrap())
+            .unwrap();
+        let position = converter
+            .convert(sampler.position_at_clamped(time).unwrap())
+            .unwrap();
+        let expected = profile.estimate_next_step_tick(&converter, position, timebase);
+        assert!(expected.is_some(), "time={time}");
+        assert_eq!(
+            cached_span(&sampler),
+            Some((profile.start_time(), profile.end_time().unwrap()))
+        );
+        assert_eq!(
+            sampler.estimate_transition_tick(start_tick, end_tick, position, &converter, timebase),
+            expected,
+            "time={time}",
+        );
+    }
 }

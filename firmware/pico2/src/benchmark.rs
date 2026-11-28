@@ -7,6 +7,16 @@ use rp235x_hal::{
 
 use crate::streaming_dma_executor::{StreamingDmaExecutor, StreamingPoll};
 
+#[cfg(feature = "planner-stages-bench")]
+use core::hint::black_box;
+#[cfg(feature = "planner-stages-bench")]
+use executor::{PioExecutionConfig, build_pio_commands};
+#[cfg(feature = "planner-stages-bench")]
+use planner::{
+    JointToStepsConverter, PinOperationBatch, TimedCoordinatedJointPathProfiles,
+    build_pin_operation_batches, build_trajectory_step_events,
+};
+
 const SUPERVISION_TIMEOUT_US: u64 = 15_000_000;
 pub const SYNTHETIC_INITIAL_LEVELS: u8 = 0b1010;
 
@@ -75,6 +85,91 @@ pub fn command_checksum(commands: &[PioCommandWord]) -> u64 {
         }
     }
     hash
+}
+
+#[cfg(feature = "planner-stages-bench")]
+#[derive(Debug, Default, Clone, Copy)]
+pub struct StageMeasurement {
+    pub construction_us: u64,
+    pub iteration_us: u64,
+    pub items: usize,
+}
+
+#[cfg(feature = "planner-stages-bench")]
+fn measure_iterator<T, E, I, F>(
+    timer: &Timer<CopyableTimer0>,
+    build: F,
+) -> Result<StageMeasurement, E>
+where
+    I: Iterator<Item = Result<T, E>>,
+    F: FnOnce() -> Result<I, E>,
+{
+    let started_at = timer.get_counter().ticks();
+    let iterator = build()?;
+    let construction_us = timer.get_counter().ticks().wrapping_sub(started_at);
+
+    let started_at = timer.get_counter().ticks();
+    let mut items = 0;
+    for item in iterator {
+        black_box(item?);
+        items += 1;
+    }
+    let iteration_us = timer.get_counter().ticks().wrapping_sub(started_at);
+
+    Ok(StageMeasurement {
+        construction_us,
+        iteration_us,
+        items,
+    })
+}
+
+#[cfg(feature = "planner-stages-bench")]
+pub fn measure_planner_stages(
+    timer: &Timer<CopyableTimer0>,
+    profiles: TimedCoordinatedJointPathProfiles<'_>,
+    converter: JointToStepsConverter,
+    config: PioExecutionConfig,
+    boundaries: &mut [u64],
+    operations: &mut [PinOperationBatch],
+) -> Result<(), ExecutorError> {
+    let transitions = measure_iterator(timer, || {
+        build_trajectory_step_events(profiles, converter, config.timebase, boundaries)
+    })
+    .map_err(ExecutorError::Planner)?;
+
+    let batches = measure_iterator(timer, || {
+        build_pin_operation_batches(
+            profiles,
+            converter,
+            config.timebase,
+            config.timing,
+            Some(config.initial_first_direction),
+            Some(config.initial_second_direction),
+            boundaries,
+            operations,
+        )
+    })
+    .map_err(ExecutorError::Planner)?;
+
+    let commands = measure_iterator(timer, || {
+        build_pio_commands(profiles, converter, config, boundaries, operations)
+    })?;
+
+    for (name, measurement) in [
+        ("Transiciones", transitions),
+        ("Operaciones", batches),
+        ("Palabras PIO", commands),
+    ] {
+        defmt::info!(
+            "{}: construccion={} us, iteracion={} us, elementos={}",
+            name,
+            measurement.construction_us,
+            measurement.iteration_us,
+            measurement.items,
+        );
+    }
+
+    Ok(())
 }
 
 pub fn measure_execution<I>(

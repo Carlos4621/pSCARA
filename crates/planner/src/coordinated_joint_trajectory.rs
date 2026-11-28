@@ -1,5 +1,7 @@
 use kinematics::JointAngles;
 
+#[cfg(feature = "transition-inverse-cache")]
+use crate::motion_profile::MotionProfileInverse;
 #[cfg(feature = "transition-hinted")]
 use crate::{JointToStepsConverter, MotorSteps, StepTimeBase};
 use crate::{PlannerError, TimedCoordinatedJointPathProfiles, TimedCoordinatedJointProfile};
@@ -69,11 +71,23 @@ impl<'a> CoordinatedJointTrajectory<'a> {
     }
 }
 
+#[cfg(feature = "transition-inverse-cache")]
+#[derive(Debug)]
+struct CachedProfile {
+    profile: TimedCoordinatedJointProfile,
+    end_time: f64,
+    inverse: MotionProfileInverse,
+}
+
 /// Muestrea posiciones en cualquier orden y conserva el último perfil consultado.
 #[derive(Debug)]
 pub struct CachedTrajectoryPositionSampler<'a> {
     trajectory: CoordinatedJointTrajectory<'a>,
+    #[cfg(feature = "transition-inverse-cache")]
+    cached_profile: Option<CachedProfile>,
+    #[cfg(not(feature = "transition-inverse-cache"))]
     cached_profile: Option<TimedCoordinatedJointProfile>,
+    #[cfg(not(feature = "transition-inverse-cache"))]
     cached_end_time: f64,
 }
 
@@ -82,6 +96,7 @@ impl<'a> CachedTrajectoryPositionSampler<'a> {
         Self {
             trajectory,
             cached_profile: None,
+            #[cfg(not(feature = "transition-inverse-cache"))]
             cached_end_time: 0.0,
         }
     }
@@ -95,17 +110,29 @@ impl<'a> CachedTrajectoryPositionSampler<'a> {
         converter: &JointToStepsConverter,
         timebase: StepTimeBase,
     ) -> Option<u64> {
-        let profile = self.cached_profile.as_ref()?;
+        let cached = self.cached_profile.as_ref()?;
+        #[cfg(not(feature = "transition-inverse-cache"))]
+        let (profile, cached_end_time) = (cached, self.cached_end_time);
+        #[cfg(feature = "transition-inverse-cache")]
+        let (profile, cached_end_time) = (&cached.profile, cached.end_time);
         let start_time = timebase
             .ticks_to_seconds(start_tick)
             .min(self.trajectory.end_time);
         let end_time = timebase
             .ticks_to_seconds(end_tick)
             .min(self.trajectory.end_time);
-        if start_time < profile.start_time() || end_time > self.cached_end_time {
+        if start_time < profile.start_time() || end_time > cached_end_time {
             return None;
         }
-        profile.estimate_next_step_tick(converter, position, timebase)
+
+        #[cfg(feature = "transition-inverse-cache")]
+        {
+            profile.estimate_next_step_tick_cached(converter, position, timebase, &cached.inverse)
+        }
+        #[cfg(not(feature = "transition-inverse-cache"))]
+        {
+            profile.estimate_next_step_tick(converter, position, timebase)
+        }
     }
 
     /// Limita los tiempos finitos posteriores al final al último instante de la trayectoria.
@@ -114,18 +141,38 @@ impl<'a> CachedTrajectoryPositionSampler<'a> {
         let time = global_time.min(self.trajectory.end_time);
 
         // En una frontera compartida, la búsqueda original elige el perfil anterior.
+        #[cfg(not(feature = "transition-inverse-cache"))]
         if let Some(profile) = &self.cached_profile
             && time > profile.start_time()
             && time <= self.cached_end_time
         {
             return profile.position_at(time);
         }
+        #[cfg(feature = "transition-inverse-cache")]
+        if let Some(cached) = &self.cached_profile
+            && time > cached.profile.start_time()
+            && time <= cached.end_time
+        {
+            return cached.profile.position_at(time);
+        }
 
         let profile = self.trajectory.find_profile(time)?;
         let end_time = profile.end_time()?;
         let position = profile.position_at(time)?;
-        self.cached_profile = Some(profile);
-        self.cached_end_time = end_time;
+        #[cfg(not(feature = "transition-inverse-cache"))]
+        {
+            self.cached_profile = Some(profile);
+            self.cached_end_time = end_time;
+        }
+        #[cfg(feature = "transition-inverse-cache")]
+        {
+            let inverse = profile.inverse();
+            self.cached_profile = Some(CachedProfile {
+                profile,
+                end_time,
+                inverse,
+            });
+        }
         Ok(position)
     }
 }

@@ -32,6 +32,13 @@ pub struct MotionProfile {
     total_time: f64,
 }
 
+#[cfg(feature = "transition-inverse-cache")]
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct MotionProfileInverse {
+    acceleration_distance: f64,
+    cruise_end_distance: f64,
+}
+
 impl MotionProfile {
     pub fn new(
         start_angle: f64,
@@ -287,6 +294,51 @@ impl MotionProfile {
                 self.max_acceleration,
             )?;
             self.total_time - remaining_time
+        };
+
+        (0.0..=self.total_time).contains(&time).then_some(time)
+    }
+
+    #[cfg(feature = "transition-inverse-cache")]
+    pub(crate) fn inverse(&self) -> MotionProfileInverse {
+        let acceleration_distance =
+            self.ramp_displacement_unscaled(self.acceleration_time, self.initial_speed);
+        let deceleration_distance =
+            self.ramp_displacement_unscaled(self.deceleration_time, self.final_speed);
+        MotionProfileInverse {
+            acceleration_distance,
+            cruise_end_distance: self.angular_displacement - deceleration_distance,
+        }
+    }
+
+    #[cfg(feature = "transition-inverse-cache")]
+    pub(crate) fn estimate_time_at_distance_cached(
+        &self,
+        distance: f64,
+        inverse: &MotionProfileInverse,
+    ) -> Option<f64> {
+        if !(0.0..=self.angular_displacement).contains(&distance) {
+            return None;
+        }
+        if distance == 0.0 {
+            return Some(0.0);
+        }
+        if distance == self.angular_displacement {
+            return Some(self.total_time);
+        }
+
+        let time = if distance <= inverse.acceleration_distance {
+            Self::estimate_ramp_time(distance, self.initial_speed, self.max_acceleration)?
+        } else if self.cruise_time > 0.0 && distance <= inverse.cruise_end_distance {
+            self.acceleration_time + (distance - inverse.acceleration_distance) / self.peak_velocity
+        } else {
+            let remaining_distance = self.angular_displacement - distance;
+            self.total_time
+                - Self::estimate_ramp_time(
+                    remaining_distance,
+                    self.final_speed,
+                    self.max_acceleration,
+                )?
         };
 
         (0.0..=self.total_time).contains(&time).then_some(time)

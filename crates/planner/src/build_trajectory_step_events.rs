@@ -27,6 +27,7 @@ impl TrajectoryTransitionSearch<'_> {
 
 #[cfg(feature = "transition-hinted")]
 impl StepTransitionSearch for TrajectoryTransitionSearch<'_> {
+    #[cfg_attr(feature = "transition-hinted-noinline", inline(never))]
     fn find_transition(
         &mut self,
         start_tick: u64,

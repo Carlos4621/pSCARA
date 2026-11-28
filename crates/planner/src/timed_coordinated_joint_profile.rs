@@ -1,5 +1,7 @@
 use kinematics::JointAngles;
 
+#[cfg(feature = "transition-inverse-cache")]
+use crate::motion_profile::MotionProfileInverse;
 use crate::{CoordinatedJointMotionProfile, PlannerError};
 #[cfg(feature = "transition-estimation")]
 use crate::{JointToStepsConverter, MotorSteps, StepTimeBase};
@@ -46,7 +48,29 @@ impl TimedCoordinatedJointProfile {
         position: MotorSteps,
         timebase: StepTimeBase,
     ) -> Option<u64> {
-        let time = self.estimate_next_step_time(converter, position)?;
+        let time = self.estimate_next_step_time(
+            converter,
+            position,
+            #[cfg(feature = "transition-inverse-cache")]
+            None,
+        )?;
+        timebase.seconds_to_ticks(time).ok()
+    }
+
+    #[cfg(feature = "transition-inverse-cache")]
+    pub(crate) fn inverse(&self) -> MotionProfileInverse {
+        self.profile.inverse()
+    }
+
+    #[cfg(feature = "transition-inverse-cache")]
+    pub(crate) fn estimate_next_step_tick_cached(
+        &self,
+        converter: &JointToStepsConverter,
+        position: MotorSteps,
+        timebase: StepTimeBase,
+        inverse: &MotionProfileInverse,
+    ) -> Option<u64> {
+        let time = self.estimate_next_step_time(converter, position, Some(inverse))?;
         timebase.seconds_to_ticks(time).ok()
     }
 
@@ -55,8 +79,14 @@ impl TimedCoordinatedJointProfile {
         &self,
         converter: &JointToStepsConverter,
         position: MotorSteps,
+        #[cfg(feature = "transition-inverse-cache")] inverse: Option<&MotionProfileInverse>,
     ) -> Option<f64> {
-        let local_time = self.profile.estimate_next_step_time(converter, position)?;
+        let local_time = self.profile.estimate_next_step_time(
+            converter,
+            position,
+            #[cfg(feature = "transition-inverse-cache")]
+            inverse,
+        )?;
         let global_time = self.start_time + local_time;
         global_time.is_finite().then_some(global_time)
     }

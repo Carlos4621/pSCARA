@@ -343,6 +343,17 @@ fn run_benchmark(
         transition_estimation_benchmark::measure(profiles, converter, config.timebase)
             .expect("fallo al comparar las busquedas de transiciones");
 
+        #[cfg(feature = "planner-stages-bench")]
+        benchmark::measure_planner_stages(
+            &timer,
+            profiles,
+            converter,
+            config,
+            &mut boundaries,
+            &mut operations,
+        )
+        .expect("fallo al medir las etapas del planificador");
+
         timer.delay_ms(BENCH_SEPARATION_MS);
     }
 

@@ -60,6 +60,49 @@ fn analytic_estimates_skip_invalid_distances_and_overflowing_discriminants() {
     );
 }
 
+#[cfg(feature = "transition-inverse-cache")]
+#[test]
+fn cached_inverse_matches_the_reference_bit_for_bit() {
+    let profiles = [
+        MotionProfile::new(0.0, 4.0, 4.0, 8.0).unwrap(),
+        MotionProfile::with_boundary_speeds(0.0, 20.0, 2.0, 5.0, 1.0, 3.0).unwrap(),
+        MotionProfile::with_boundary_speeds(0.0, -20.0, 2.0, 5.0, 3.0, 1.0).unwrap(),
+        MotionProfile::new(0.0, 1.0, f64::MAX, f64::MAX).unwrap(),
+        MotionProfile::new(0.0, f64::MIN_POSITIVE, 1.0, 1.0).unwrap(),
+        MotionProfile::new(1.0, 1.0, 1.0, 1.0).unwrap(),
+    ];
+    for profile in profiles {
+        let inverse = profile.inverse();
+        let compare = |distance| {
+            assert_eq!(
+                profile
+                    .estimate_time_at_distance_cached(distance, &inverse)
+                    .map(f64::to_bits),
+                profile
+                    .estimate_time_at_distance(distance)
+                    .map(f64::to_bits),
+                "profile={profile:?}, distance={distance}",
+            );
+        };
+        for index in 0..=1024 {
+            compare(profile.angular_displacement * (f64::from(index) / 1024.0));
+        }
+        for boundary in [
+            0.0,
+            inverse.acceleration_distance,
+            inverse.cruise_end_distance,
+            profile.angular_displacement,
+        ] {
+            compare(boundary.next_down());
+            compare(boundary);
+            compare(boundary.next_up());
+        }
+        for distance in [-0.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            compare(distance);
+        }
+    }
+}
+
 fn assert_unscaled_position_matches_scaled(profile: &MotionProfile, time: f64) {
     let expected = profile
         .position_at_scaled(time, profile.total_time())

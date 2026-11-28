@@ -1,5 +1,7 @@
 use kinematics::JointAngles;
 
+#[cfg(feature = "transition-inverse-cache")]
+use crate::motion_profile::MotionProfileInverse;
 use crate::{
     JointAccelerationLimits, JointVelocityLimits, MotionProfile, PlannerError,
     profile_math::{product_ratio, products_equal},
@@ -91,6 +93,7 @@ impl CoordinatedJointMotionProfile {
         &self,
         converter: &JointToStepsConverter,
         position: MotorSteps,
+        #[cfg(feature = "transition-inverse-cache")] inverse: Option<&MotionProfileInverse>,
     ) -> Option<f64> {
         let (first, second) = converter.next_step_thresholds(
             position,
@@ -115,8 +118,19 @@ impl CoordinatedJointMotionProfile {
                 });
             }
         }
+        #[cfg(feature = "transition-inverse-cache")]
+        if let Some(inverse) = inverse {
+            return self
+                .progress_profile
+                .estimate_time_at_distance_cached(next_progress?, inverse);
+        }
         self.progress_profile
             .estimate_time_at_distance(next_progress?)
+    }
+
+    #[cfg(feature = "transition-inverse-cache")]
+    pub(crate) fn inverse(&self) -> MotionProfileInverse {
+        self.progress_profile.inverse()
     }
 
     pub fn velocity_at(&self, time: f64) -> Result<(f64, f64), PlannerError> {

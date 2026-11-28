@@ -67,6 +67,45 @@ impl<'a> CoordinatedJointTrajectory<'a> {
     }
 }
 
+/// Muestrea posiciones en cualquier orden y conserva el último perfil consultado.
+#[derive(Debug)]
+pub struct CachedTrajectoryPositionSampler<'a> {
+    trajectory: CoordinatedJointTrajectory<'a>,
+    cached_profile: Option<TimedCoordinatedJointProfile>,
+    cached_end_time: f64,
+}
+
+impl<'a> CachedTrajectoryPositionSampler<'a> {
+    pub fn new(trajectory: CoordinatedJointTrajectory<'a>) -> Self {
+        Self {
+            trajectory,
+            cached_profile: None,
+            cached_end_time: 0.0,
+        }
+    }
+
+    /// Limita los tiempos finitos posteriores al final al último instante de la trayectoria.
+    pub fn position_at_clamped(&mut self, global_time: f64) -> Result<JointAngles, PlannerError> {
+        utilities::validate_finite_positive(global_time).map_err(|_| PlannerError::InvalidTime)?;
+        let time = global_time.min(self.trajectory.end_time);
+
+        // En una frontera compartida, la búsqueda original elige el perfil anterior.
+        if let Some(profile) = &self.cached_profile
+            && time > profile.start_time()
+            && time <= self.cached_end_time
+        {
+            return profile.position_at(time);
+        }
+
+        let profile = self.trajectory.find_profile(time)?;
+        let end_time = profile.end_time()?;
+        let position = profile.position_at(time)?;
+        self.cached_profile = Some(profile);
+        self.cached_end_time = end_time;
+        Ok(position)
+    }
+}
+
 fn sample_profile_at(
     profile: &TimedCoordinatedJointProfile,
     global_time: f64,
@@ -155,3 +194,7 @@ impl<'a> CoordinatedJointTrajectoryCursor<'a> {
         Err(PlannerError::ProfileInstanceNotFound)
     }
 }
+
+#[cfg(test)]
+#[path = "../tests/unit/cached_trajectory_position_sampler.rs"]
+mod cached_sampler_tests;

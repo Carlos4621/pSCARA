@@ -1,8 +1,8 @@
 use crate::{
-    CoordinatedJointTrajectory, JointToStepsConverter, MotorSteps, PlannerError,
-    SegmentedTrajectoryStepEventIterator, StepDirEvent, StepDirTiming, StepDirection, StepTimeBase,
-    TimedCoordinatedJointPathProfiles, build_segmented_step_events, into_step_dir_events,
-    validate_step_dir_intervals, validate_step_dir_schedule,
+    CachedTrajectoryPositionSampler, CoordinatedJointTrajectory, JointToStepsConverter, MotorSteps,
+    PlannerError, SegmentedTrajectoryStepEventIterator, StepDirEvent, StepDirTiming, StepDirection,
+    StepTimeBase, TimedCoordinatedJointPathProfiles, build_segmented_step_events,
+    into_step_dir_events, validate_step_dir_intervals, validate_step_dir_schedule,
 };
 
 pub fn build_trajectory_step_events<'a>(
@@ -11,7 +11,7 @@ pub fn build_trajectory_step_events<'a>(
     timebase: StepTimeBase,
     boundaries_buffer: &'a mut [u64],
 ) -> Result<
-    SegmentedTrajectoryStepEventIterator<'a, impl Fn(u64) -> Result<MotorSteps, PlannerError>>,
+    SegmentedTrajectoryStepEventIterator<'a, impl FnMut(u64) -> Result<MotorSteps, PlannerError>>,
     PlannerError,
 > {
     let trajectory = CoordinatedJointTrajectory::new(profiles)?;
@@ -20,10 +20,11 @@ pub fn build_trajectory_step_events<'a>(
     validate_subtick_boundaries(profiles, &trajectory, &converter, timebase)?;
     validate_step_frequencies(profiles, &converter, timebase)?;
 
-    let position_at_tick = move |tick: u64| -> Result<MotorSteps, PlannerError> {
+    let mut sampler = CachedTrajectoryPositionSampler::new(trajectory);
+    let mut position_at_tick = move |tick: u64| -> Result<MotorSteps, PlannerError> {
         let time = timebase.ticks_to_seconds(tick);
 
-        let angles = trajectory.position_at_clamped(time)?;
+        let angles = sampler.position_at_clamped(time)?;
 
         converter.convert(angles)
     };
@@ -65,7 +66,7 @@ pub fn build_verified_trajectory_step_events<'a>(
     timebase: StepTimeBase,
     boundaries_buffer: &'a mut [u64],
 ) -> Result<
-    SegmentedTrajectoryStepEventIterator<'a, impl Fn(u64) -> Result<MotorSteps, PlannerError>>,
+    SegmentedTrajectoryStepEventIterator<'a, impl FnMut(u64) -> Result<MotorSteps, PlannerError>>,
     PlannerError,
 > {
     preflight_trajectory_step_events(profiles, converter, timebase, boundaries_buffer)?;

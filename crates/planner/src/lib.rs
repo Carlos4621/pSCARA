@@ -55,7 +55,8 @@ pub use timed_coordinated_joint_path_profiles::TimedCoordinatedJointPathProfiles
 
 mod coordinated_joint_trajectory;
 pub use coordinated_joint_trajectory::{
-    CoordinatedJointSample, CoordinatedJointTrajectory, CoordinatedJointTrajectoryCursor,
+    CachedTrajectoryPositionSampler, CoordinatedJointSample, CoordinatedJointTrajectory,
+    CoordinatedJointTrajectoryCursor,
 };
 
 mod joint_to_steps_converter;

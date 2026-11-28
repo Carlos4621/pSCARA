@@ -1,13 +1,16 @@
 use executor::{
-    ExecutorError, PIO_FRAME_OVERHEAD_CYCLES, PioCommandWord, PioExecutionConfig,
+    ExecutionCommandIterator, ExecutorError, PIO_FRAME_OVERHEAD_CYCLES, PackedPinFrameIterator,
+    PinFrameEncoder, PinFrameIterator, PioCommandIterator, PioCommandWord, PioExecutionConfig,
     build_pio_commands, build_verified_pio_commands, pio_frame_cycles,
 };
 use kinematics::JointAngles;
 use planner::{
-    CoordinatedJointPathProfiles, JointAccelerationLimits, JointToStepsConverter,
-    JointVelocityLimits, PinOperationBatch, PlannerError, StepDirTiming,
+    CoordinatedJointPathProfiles, CoordinatedJointTrajectory, JointAccelerationLimits,
+    JointToStepsConverter, JointVelocityLimits, PinOperationBatch, PinOperationBatchIterator,
+    PlannerError, StepDirScheduleCursor, StepDirScheduleIterator, StepDirTiming,
     StepDirection::{Negative, Positive},
-    StepTimeBase, TimedCoordinatedJointPathProfiles,
+    StepTimeBase, TimedCoordinatedJointPathProfiles, build_segmented_step_events,
+    into_step_dir_events, plan_joint_path_speeds,
 };
 
 const TWO_MOTOR_PATH: [[f64; 2]; 2] = [[0.0, 0.0], [0.25, -0.25]];
@@ -54,6 +57,134 @@ fn two_motor_config() -> PioExecutionConfig {
         first_positive_is_high: true,
         second_positive_is_high: true,
     }
+}
+
+fn pico2_benchmark_config() -> PioExecutionConfig {
+    PioExecutionConfig {
+        timebase: StepTimeBase::new(100_000).unwrap(),
+        timing: StepDirTiming::new(10_000, 10_000, 10_000, 10_000).unwrap(),
+        pio_frequency_hz: 1_000_000,
+        ..two_motor_config()
+    }
+}
+
+fn uncached_words(
+    profiles: TimedCoordinatedJointPathProfiles<'_>,
+    converter: JointToStepsConverter,
+    config: PioExecutionConfig,
+) -> Result<Vec<u32>, ExecutorError> {
+    let trajectory = CoordinatedJointTrajectory::new(profiles)?;
+    let position_at_tick = |tick| {
+        let time = config.timebase.ticks_to_seconds(tick);
+        converter.convert(trajectory.position_at_clamped(time)?)
+    };
+    let mut boundaries = [0; 8];
+    let mut operations = [PinOperationBatch::new(0); 64];
+    let events = build_segmented_step_events(
+        profiles,
+        config.timebase,
+        &mut boundaries,
+        position_at_tick(0)?,
+        position_at_tick,
+    )?;
+    let cursor = StepDirScheduleCursor::new(
+        config.timing,
+        config.timebase,
+        Some(config.initial_first_direction),
+        Some(config.initial_second_direction),
+    )?;
+    let batches = PinOperationBatchIterator::new(
+        StepDirScheduleIterator::new(into_step_dir_events(events), cursor),
+        config.timing.min_step_high_ticks(config.timebase)?,
+        config.timing.min_dir_setup_ticks(config.timebase)?,
+        &mut operations,
+    )?;
+    let encoder = PinFrameEncoder::new(
+        config.initial_first_direction,
+        config.initial_second_direction,
+        config.first_positive_is_high,
+        config.second_positive_is_high,
+    );
+    let levels = encoder.levels();
+    let frames = PinFrameIterator::new(batches, encoder);
+    let packed = PackedPinFrameIterator::new(frames, levels)?;
+    let commands = ExecutionCommandIterator::new(packed, levels)?;
+    PioCommandIterator::new(commands, levels, config.timebase, config.pio_frequency_hz)?
+        .map(|command| command.map(|word| word.bits()))
+        .collect()
+}
+
+fn assert_same_pio_words(
+    profiles: TimedCoordinatedJointPathProfiles<'_>,
+    converter: JointToStepsConverter,
+    config: PioExecutionConfig,
+    case: &str,
+) -> Result<usize, ExecutorError> {
+    let expected = uncached_words(profiles, converter, config)?;
+    let mut boundaries = [0; 8];
+    let mut operations = [PinOperationBatch::new(0); 64];
+    let commands = build_pio_commands(
+        profiles,
+        converter,
+        config,
+        &mut boundaries,
+        &mut operations,
+    )?;
+    let actual = commands
+        .map(|command| command.map(|word| word.bits()))
+        .collect::<Result<Vec<_>, _>>()?;
+    assert_eq!(actual.len(), expected.len(), "{case}");
+    for (index, (&actual, &expected)) in actual.iter().zip(&expected).enumerate() {
+        assert_eq!(
+            actual, expected,
+            "{case}, word {index}: {actual:#010x} vs {expected:#010x}"
+        );
+    }
+    assert_eq!(
+        actual.last().copied(),
+        Some(PioCommandWord::END.bits()),
+        "{case}"
+    );
+    Ok(actual.len())
+}
+
+#[test]
+fn cached_sampling_preserves_every_pio_word_of_the_pico2_benchmark() -> Result<(), ExecutorError> {
+    let points = points([[0.0, 0.0], [1.0, -0.75]]);
+    let steps_per_radian = (200.0 * 16.0 * 4.0) / core::f64::consts::TAU;
+    let converter = JointToStepsConverter::new(steps_per_radian, steps_per_radian)?;
+    let config = pico2_benchmark_config();
+    for speed in [0.5, 1.0, 2.0, 4.0] {
+        let limits = (
+            JointVelocityLimits::new(speed, speed)?,
+            JointAccelerationLimits::new(10.0, 10.0)?,
+        );
+        let profiles = timed_path(&points, &[0.0; 2], &limits);
+        assert_eq!(
+            assert_same_pio_words(profiles, converter, config, &format!("{speed} rad/s"))?,
+            7133
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn cached_sampling_preserves_pio_words_through_moving_junctions_and_reversals()
+-> Result<(), ExecutorError> {
+    let points = points([[0.0, 0.0], [0.25, -0.125], [0.5, -0.25], [0.25, 0.125]]);
+    let limits = limits();
+    let mut speeds = [0.0; 4];
+    plan_joint_path_speeds(&points, &limits.0, &limits.1, &mut speeds)?;
+    assert!(speeds[1] > 0.0);
+    assert_eq!(speeds[2], 0.0);
+    let profiles = timed_path(&points, &speeds, &limits);
+    assert_same_pio_words(
+        profiles,
+        two_motor_converter(),
+        pico2_benchmark_config(),
+        "multi-segment path",
+    )?;
+    Ok(())
 }
 
 #[test]

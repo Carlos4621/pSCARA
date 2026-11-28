@@ -1,7 +1,7 @@
 use executor::{
     ExecutionCommandIterator, ExecutorError, PIO_FRAME_OVERHEAD_CYCLES, PackedPinFrameIterator,
     PinFrameEncoder, PinFrameIterator, PioCommandIterator, PioCommandWord, PioExecutionConfig,
-    build_pio_commands, build_verified_pio_commands, pio_frame_cycles,
+    build_pio_commands, build_verified_pio_commands, pio_frame_cycles, prepare_pio_trajectory,
 };
 use kinematics::JointAngles;
 use planner::{
@@ -150,6 +150,24 @@ fn assert_same_pio_words(
         Some(PioCommandWord::END.bits()),
         "{case}"
     );
+
+    let mut storage = vec![PioCommandWord::END; actual.len()];
+    let prepared = prepare_pio_trajectory(
+        profiles,
+        converter,
+        config,
+        &mut boundaries,
+        &mut operations,
+        &mut storage,
+    )?;
+    assert!(
+        prepared
+            .commands()
+            .iter()
+            .map(PioCommandWord::bits)
+            .eq(actual.iter().copied()),
+        "{case}: las palabras preparadas difieren",
+    );
     Ok(actual.len())
 }
 
@@ -235,6 +253,95 @@ fn both_builders_preserve_the_exact_words_and_timing_of_the_two_motor_path()
     }
     assert_eq!(boundaries, [0, 8]);
     Ok(())
+}
+
+#[test]
+fn prepared_trajectory_matches_the_generator_and_only_borrows_word_storage()
+-> Result<(), ExecutorError> {
+    let mut storage = [PioCommandWord::END; TWO_MOTOR_MOVEMENT.len() + 1];
+    let prepared = {
+        let points = points(TWO_MOTOR_PATH);
+        let limits = limits();
+        let speeds = [0.0; 2];
+        let profiles = timed_path(&points, &speeds, &limits);
+        let mut boundaries = [0; 2];
+        let mut operations = [PinOperationBatch::new(0); 4];
+        let config = two_motor_config();
+        let converter = two_motor_converter();
+        let prepared = prepare_pio_trajectory(
+            profiles,
+            converter,
+            config,
+            &mut boundaries,
+            &mut operations,
+            &mut storage,
+        )?;
+        let expected = build_pio_commands(
+            profiles,
+            converter,
+            config,
+            &mut boundaries,
+            &mut operations,
+        )?;
+        assert!(prepared.iter().eq(expected));
+        prepared
+    };
+
+    assert_eq!(prepared.len(), TWO_MOTOR_MOVEMENT.len() + 1);
+    assert_eq!(prepared.commands().last(), Some(&PioCommandWord::END));
+    assert_eq!(prepared.initial_levels(), 0b1000);
+    assert_eq!(prepared.final_levels(), 0b0010);
+    assert_eq!(prepared.frame_cycles(), 70 + PIO_FRAME_OVERHEAD_CYCLES);
+    assert_eq!(prepared.duration_seconds(), 0.95);
+    Ok(())
+}
+
+#[test]
+fn preparing_words_distinguishes_capacity_errors_from_planner_errors() {
+    let points = points(TWO_MOTOR_PATH);
+    let limits = limits();
+    let profiles = timed_path(&points, &[0.0; 2], &limits);
+    let converter = two_motor_converter();
+    let config = two_motor_config();
+    let mut boundaries = [0; 2];
+    let mut operations = [PinOperationBatch::new(0); 4];
+    let mut storage = [PioCommandWord::END; TWO_MOTOR_MOVEMENT.len()];
+
+    let error = prepare_pio_trajectory(
+        profiles,
+        converter,
+        config,
+        &mut boundaries,
+        &mut operations,
+        &mut storage,
+    )
+    .unwrap_err();
+    assert_eq!(error, ExecutorError::InsufficientCommandBuffer);
+
+    let error = prepare_pio_trajectory(
+        profiles,
+        converter,
+        config,
+        &mut [],
+        &mut operations,
+        &mut [],
+    )
+    .unwrap_err();
+    assert_eq!(error, ExecutorError::InsufficientCommandBuffer);
+
+    let error = prepare_pio_trajectory(
+        profiles,
+        converter,
+        config,
+        &mut [],
+        &mut operations,
+        &mut storage,
+    )
+    .unwrap_err();
+    assert_eq!(
+        error,
+        ExecutorError::Planner(PlannerError::InsufficientBoundaryBuffer)
+    );
 }
 
 #[test]
@@ -458,5 +565,17 @@ fn verifies_cycle_count_overflow_at_the_first_step_at_tick_two() -> Result<(), E
         &mut operations,
     );
     assert_eq!(verified.err(), Some(ExecutorError::CycleCountOverflow));
+    assert_eq!(
+        prepare_pio_trajectory(
+            profiles,
+            converter,
+            config,
+            &mut boundaries,
+            &mut operations,
+            &mut [PioCommandWord::END; 1],
+        )
+        .unwrap_err(),
+        ExecutorError::CycleCountOverflow
+    );
     Ok(())
 }

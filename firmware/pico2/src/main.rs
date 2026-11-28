@@ -24,8 +24,7 @@ mod wokwi_test;
 
 #[cfg(not(feature = "wokwi-test"))]
 use benchmark::{
-    SYNTHETIC_INITIAL_LEVELS, command_checksum, measure_execution, prepare_commands,
-    synthetic_step_commands,
+    SYNTHETIC_INITIAL_LEVELS, command_checksum, measure_execution, synthetic_step_commands,
 };
 use defmt_rtt as _;
 #[cfg(not(feature = "wokwi-pio-test"))]
@@ -33,7 +32,7 @@ use dma_command_buffer::DmaCommandBuffer;
 #[cfg(not(feature = "wokwi-test"))]
 use embedded_hal::{delay::DelayNs, digital::OutputPin};
 #[cfg(not(feature = "wokwi-test"))]
-use executor::{PioCommandWord, PioExecutionConfig, build_pio_commands};
+use executor::{PioCommandWord, PioExecutionConfig, prepare_pio_trajectory};
 #[cfg(not(feature = "wokwi-test"))]
 use kinematics::JointAngles;
 use panic_probe as _;
@@ -289,55 +288,40 @@ fn run_benchmark(
         };
 
         let preparation_started = timer.get_counter().ticks();
-        let commands = build_pio_commands(
+        let prepared = match prepare_pio_trajectory(
             profiles,
             converter,
             config,
             &mut boundaries,
             &mut operations,
-        );
-        let Some(prepared) = prepare_commands(storage, commands) else {
-            continue;
+            storage,
+        ) {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                defmt::warn!("Preparacion fallida: {:?}", defmt::Debug2Format(&error));
+                continue;
+            }
         };
         let preparation_elapsed = timer
             .get_counter()
             .ticks()
             .wrapping_sub(preparation_started);
         defmt::info!(
-            "Preparacion y verificacion={} us, palabras={}",
+            "Preparacion={} us, palabras={}, ciclos={}, duracion={} s",
             preparation_elapsed,
-            prepared.len()
+            prepared.len(),
+            prepared.frame_cycles(),
+            prepared.duration_seconds(),
         );
-        defmt::info!("Checksum PIO={}", command_checksum(prepared));
-
-        defmt::info!("Trayectoria con generacion durante la ejecucion");
-        match build_pio_commands(
-            profiles,
-            converter,
-            config,
-            &mut boundaries,
-            &mut operations,
-        ) {
-            Ok(commands) => {
-                executor = measure_execution(
-                    executor,
-                    &mut pio,
-                    &timer,
-                    commands,
-                    config.initial_levels(),
-                );
-            }
-            Err(error) => defmt::warn!("Reconstruccion fallida: {:?}", defmt::Debug2Format(&error)),
-        }
-        timer.delay_ms(BENCH_SEPARATION_MS);
+        defmt::info!("Checksum PIO={}", command_checksum(prepared.commands()));
 
         defmt::info!("Trayectoria con palabras preparadas en RAM");
         executor = measure_execution(
             executor,
             &mut pio,
             &timer,
-            prepared.iter().copied().map(Ok),
-            config.initial_levels(),
+            prepared.iter(),
+            prepared.initial_levels(),
         );
         #[cfg(feature = "transition-estimation-bench")]
         transition_estimation_benchmark::measure(profiles, converter, config.timebase)

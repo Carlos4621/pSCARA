@@ -16,6 +16,7 @@ pub enum ExecutorError {
     CycleCountOverflow,
     MissingEndCommand,
     EmptyCommandBuffer,
+    InsufficientCommandBuffer,
     UnexpectedCommandAfterEnd,
 }
 

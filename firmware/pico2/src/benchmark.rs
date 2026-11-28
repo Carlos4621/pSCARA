@@ -42,36 +42,6 @@ pub fn synthetic_step_commands(
         .chain(core::iter::once(Ok(PioCommandWord::END))))
 }
 
-/// Conserva todas las palabras solo cuando se pudo recorrer la secuencia completa.
-pub fn prepare_commands<I>(
-    storage: &mut [PioCommandWord],
-    commands: Result<I, ExecutorError>,
-) -> Option<&[PioCommandWord]>
-where
-    I: Iterator<Item = Result<PioCommandWord, ExecutorError>>,
-{
-    let prepared = commands.and_then(|commands| {
-        let mut len = 0;
-        for command in commands {
-            let word = command?;
-            let Some(slot) = storage.get_mut(len) else {
-                defmt::warn!("Capacidad de preparacion insuficiente: {} palabras", len);
-                return Ok(None);
-            };
-            *slot = word;
-            len += 1;
-        }
-        Ok(Some(&storage[..len]))
-    });
-    match prepared {
-        Ok(words) => words,
-        Err(error) => {
-            defmt::warn!("Verificacion fallida: {:?}", defmt::Debug2Format(&error));
-            None
-        }
-    }
-}
-
 /// FNV-1a de los bytes little-endian de cada palabra, incluido END.
 pub fn command_checksum(commands: &[PioCommandWord]) -> u64 {
     const OFFSET: u64 = 0xcbf29ce484222325;

@@ -47,3 +47,6 @@ pub use pio_execution_config::PioExecutionConfig;
 
 mod build_pio_commands;
 pub use build_pio_commands::{build_pio_commands, build_verified_pio_commands};
+
+mod prepared_pio_trajectory;
+pub use prepared_pio_trajectory::{PreparedPioTrajectory, prepare_pio_trajectory};

@@ -1,7 +1,7 @@
 #![no_std]
 #![no_main]
 
-#[cfg(not(feature = "wokwi-test"))]
+#[cfg(not(any(feature = "motion-controller-bench", feature = "wokwi-test")))]
 mod benchmark;
 #[cfg(feature = "wokwi-pio-test")]
 mod cpu_executor;
@@ -15,28 +15,39 @@ mod dma_command_buffer;
 mod dma_executor;
 #[cfg(not(feature = "wokwi-pio-test"))]
 mod dma_pair;
+#[cfg(all(feature = "motion-controller-bench", not(feature = "wokwi-test")))]
+mod motion_controller_bench;
+#[cfg(all(feature = "motion-controller-bench", not(feature = "wokwi-test")))]
+mod rp2350_motion_controller;
 #[cfg(not(feature = "wokwi-pio-test"))]
 mod streaming_dma_executor;
-#[cfg(all(feature = "transition-estimation-bench", not(feature = "wokwi-test")))]
+#[cfg(all(
+    feature = "transition-estimation-bench",
+    not(any(feature = "motion-controller-bench", feature = "wokwi-test"))
+))]
 mod transition_estimation_benchmark;
 #[cfg(feature = "wokwi-test")]
 mod wokwi_test;
 
-#[cfg(not(feature = "wokwi-test"))]
+#[cfg(not(any(feature = "motion-controller-bench", feature = "wokwi-test")))]
 use benchmark::{
     SYNTHETIC_INITIAL_LEVELS, command_checksum, measure_execution, synthetic_step_commands,
 };
 use defmt_rtt as _;
 #[cfg(not(feature = "wokwi-pio-test"))]
 use dma_command_buffer::DmaCommandBuffer;
+#[cfg(not(any(feature = "motion-controller-bench", feature = "wokwi-test")))]
+use embedded_hal::delay::DelayNs;
+#[cfg(all(feature = "motion-controller-bench", not(feature = "wokwi-test")))]
+use embedded_hal::digital::InputPin;
 #[cfg(not(feature = "wokwi-test"))]
-use embedded_hal::{delay::DelayNs, digital::OutputPin};
-#[cfg(not(feature = "wokwi-test"))]
+use embedded_hal::digital::OutputPin;
+#[cfg(not(any(feature = "motion-controller-bench", feature = "wokwi-test")))]
 use executor::{PioCommandWord, PioExecutionConfig, prepare_pio_trajectory};
-#[cfg(not(feature = "wokwi-test"))]
+#[cfg(not(any(feature = "motion-controller-bench", feature = "wokwi-test")))]
 use kinematics::JointAngles;
 use panic_probe as _;
-#[cfg(not(feature = "wokwi-test"))]
+#[cfg(not(any(feature = "motion-controller-bench", feature = "wokwi-test")))]
 use planner::{
     CoordinatedJointPathProfiles, JointAccelerationLimits, JointToStepsConverter,
     JointVelocityLimits, PinOperationBatch, StepDirTiming, StepDirection, StepTimeBase,
@@ -55,11 +66,11 @@ use streaming_dma_executor::StreamingDmaExecutor;
 const XOSC_HZ: u32 = 12_000_000;
 const PIO_HZ: u32 = 1_000_000;
 const BLOCK_CAPACITY: usize = 128;
-#[cfg(not(feature = "wokwi-test"))]
+#[cfg(not(any(feature = "motion-controller-bench", feature = "wokwi-test")))]
 const PULSE_COUNT: usize = 10_000;
 #[cfg(not(feature = "wokwi-test"))]
 const PREPARED_CAPACITY: usize = 8_192;
-#[cfg(not(feature = "wokwi-test"))]
+#[cfg(not(any(feature = "motion-controller-bench", feature = "wokwi-test")))]
 const BENCH_SEPARATION_MS: u32 = 1_000;
 #[cfg(feature = "wokwi-test")]
 const _: () = {
@@ -199,6 +210,13 @@ fn main() -> ! {
     }
     #[cfg(not(feature = "wokwi-test"))]
     {
+        #[cfg(feature = "motion-controller-bench")]
+        motion_controller_bench::run((executor, pio, timer), u64::from(system_clock_hz), || {
+            let first_low = step_1.as_input().is_low().unwrap();
+            let second_low = step_2.as_input().is_low().unwrap();
+            first_low && second_low
+        });
+        #[cfg(not(feature = "motion-controller-bench"))]
         run_benchmark(executor, pio, timer);
         led.set_high().unwrap();
     }
@@ -207,7 +225,7 @@ fn main() -> ! {
     }
 }
 
-#[cfg(not(feature = "wokwi-test"))]
+#[cfg(not(any(feature = "motion-controller-bench", feature = "wokwi-test")))]
 fn run_benchmark(
     mut executor: StreamingDmaExecutor,
     mut pio: hal::pio::PIO<pac::PIO0>,

@@ -194,6 +194,103 @@ fn optimized_sampling_preserves_every_pio_word_of_the_pico2_benchmark() -> Resul
 }
 
 #[test]
+fn prepared_pio_round_trip_emits_the_expected_signed_displacements() -> Result<(), ExecutorError> {
+    let steps_per_radian = (200.0 * 16.0 * 4.0) / core::f64::consts::TAU;
+    let converter = JointToStepsConverter::new(steps_per_radian, steps_per_radian)?;
+    let limits = (
+        JointVelocityLimits::new(0.5, 0.5)?,
+        JointAccelerationLimits::new(10.0, 10.0)?,
+    );
+    let origin = MotorSteps {
+        first: 0,
+        second: 0,
+    };
+    let far_end = MotorSteps {
+        first: 2037,
+        second: -1528,
+    };
+    let outward = [[0.0, 0.0], [1.0, -0.75]];
+    let mut storage = vec![PioCommandWord::END; 8_192];
+    let mut boundaries = [0; 2];
+    let mut operations = [PinOperationBatch::new(0); 64];
+
+    for reversed in [false, true] {
+        let mut angles = points(outward);
+        let (start, target) = if reversed {
+            angles.reverse();
+            (far_end, origin)
+        } else {
+            (origin, far_end)
+        };
+        let profiles = timed_path(&angles, &[0.0; 2], &limits);
+        for [first_positive_is_high, second_positive_is_high] in
+            [[true, true], [true, false], [false, true], [false, false]]
+        {
+            let config = PioExecutionConfig {
+                first_positive_is_high,
+                second_positive_is_high,
+                ..pico2_benchmark_config()
+            };
+            let prepared = prepare_pio_trajectory(
+                profiles,
+                converter,
+                config,
+                &mut boundaries,
+                &mut operations,
+                &mut storage,
+            )?;
+            assert_eq!(prepared.start_position(), start);
+            assert_eq!(prepared.target_position(), target);
+            let expected = [
+                prepared.target_position().first - prepared.start_position().first,
+                prepared.target_position().second - prepared.start_position().second,
+            ];
+            let polarities = [first_positive_is_high, second_positive_is_high];
+            let mut previous_levels = prepared.initial_levels();
+            let word_count = prepared.len();
+            assert_eq!(prepared.iter().count(), word_count);
+            let mut commands = prepared.into_commands();
+            assert_eq!(commands.size_hint(), (word_count, Some(word_count)));
+            let mut displacement = [0, 0];
+
+            for remaining in (1..=word_count).rev() {
+                assert_eq!(commands.len(), remaining);
+                let word = commands.next().unwrap()?;
+                let Some(levels) = word.levels() else {
+                    assert_eq!(remaining, 1, "END debe ser la última palabra");
+                    assert_eq!(previous_levels & 0b0101, 0, "STEP debe terminar en LOW");
+                    break;
+                };
+                assert_ne!(remaining, 1, "falta END");
+                let rising = levels & !previous_levels;
+                // El bus PIO usa STEP1, DIR1, STEP2, DIR2, de menor a mayor bit.
+                for (motor, (step_bit, dir_bit)) in
+                    [(0b0001, 0b0010), (0b0100, 0b1000)].into_iter().enumerate()
+                {
+                    if rising & step_bit != 0 {
+                        let dir_is_high = levels & dir_bit != 0;
+                        displacement[motor] += if dir_is_high == polarities[motor] {
+                            1
+                        } else {
+                            -1
+                        };
+                    }
+                }
+                previous_levels = levels;
+            }
+            assert_eq!(
+                displacement, expected,
+                "vuelta={reversed}, DIR={polarities:?}"
+            );
+            assert_eq!(commands.size_hint(), (0, Some(0)));
+            assert!(commands.next().is_none());
+            assert!(commands.next().is_none());
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn optimized_sampling_preserves_pio_words_through_moving_junctions_and_reversals()
 -> Result<(), ExecutorError> {
     let points = points([[0.0, 0.0], [0.25, -0.125], [0.5, -0.25], [0.25, 0.125]]);

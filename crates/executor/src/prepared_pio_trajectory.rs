@@ -20,6 +20,37 @@ pub struct PreparedPioTrajectory<'a> {
     target_position: MotorSteps,
 }
 
+/// Iterador sobre las palabras que conserva el préstamo del búfer original.
+#[derive(Debug)]
+pub struct PreparedPioCommands<'a> {
+    commands: core::slice::Iter<'a, PioCommandWord>,
+}
+
+impl Iterator for PreparedPioCommands<'_> {
+    type Item = Result<PioCommandWord, ExecutorError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.commands.next().copied().map(Ok)
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.commands.size_hint()
+    }
+}
+
+impl ExactSizeIterator for PreparedPioCommands<'_> {}
+
+impl core::iter::FusedIterator for PreparedPioCommands<'_> {}
+
+impl<'a> PreparedPioTrajectory<'a> {
+    /// Transfiere el préstamo del almacenamiento al iterador.
+    pub fn into_commands(self) -> PreparedPioCommands<'a> {
+        PreparedPioCommands {
+            commands: self.commands.iter(),
+        }
+    }
+}
+
 impl PreparedPioTrajectory<'_> {
     pub fn commands(&self) -> &[PioCommandWord] {
         self.commands

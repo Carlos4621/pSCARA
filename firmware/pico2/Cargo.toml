@@ -13,6 +13,7 @@ bench = false
 [features]
 adafruit-feather-rp2350 = []
 dcp-accelerated = ["rp235x-hal/dcp-fast-f64"]
+motion-controller-bench = ["dep:controller"]
 planner-stages-bench = []
 transition-estimation-bench = ["planner/transition-estimation"]
 transition-hinted = ["planner/transition-hinted"]
@@ -22,6 +23,7 @@ wokwi-test = ["dep:scara-wokwi"]
 wokwi-pio-test = ["wokwi-test"]
 
 [dependencies]
+controller = { path = "../../crates/controller", optional = true }
 executor = { path = "../../crates/executor" }
 kinematics = { path = "../../crates/kinematics" }
 planner = { path = "../../crates/planner", default-features = false }

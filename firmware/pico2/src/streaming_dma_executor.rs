@@ -41,6 +41,7 @@ pub struct ActiveStreamingExecution<I> {
     output_gpios: [u8; 4],
     clock_divisor: u16,
     timeout_us: u64,
+    initial_setup_guard_us: u64,
     statistics: StreamingStatistics,
 }
 
@@ -100,15 +101,43 @@ impl StreamingDmaExecutor {
         }
     }
 
+    #[allow(
+        dead_code,
+        reason = "se usa para validar la frecuencia física del controlador"
+    )]
+    pub fn clock_divisor(&self) -> u16 {
+        self.clock_divisor
+    }
+
     /// Inicia la precarga con instrucciones de `build_verified_pio_commands`,
     /// del generador sintético verificado o con una única palabra END.
+    #[cfg_attr(
+        all(feature = "motion-controller-bench", not(feature = "wokwi-test")),
+        allow(dead_code, reason = "el controlador inicia la precarga con un margen")
+    )]
     pub fn start<I>(
+        self,
+        pio: &mut PIO<PIO0>,
+        timer: &Timer<CopyableTimer0>,
+        commands: I,
+        initial_levels: u8,
+        timeout_us: u64,
+    ) -> Result<ActiveStreamingExecution<I>, (Self, PioExecutionError)>
+    where
+        I: Iterator<Item = Result<PioCommandWord, ExecutorError>>,
+    {
+        self.start_guarded(pio, timer, commands, initial_levels, timeout_us, 0)
+    }
+
+    /// Precarga DMA y aplaza el arranque de PIO hasta que venza el margen de establecimiento.
+    pub fn start_guarded<I>(
         mut self,
         pio: &mut PIO<PIO0>,
         timer: &Timer<CopyableTimer0>,
         commands: I,
         initial_levels: u8,
         timeout_us: u64,
+        initial_setup_guard_us: u64,
     ) -> Result<ActiveStreamingExecution<I>, (Self, PioExecutionError)>
     where
         I: Iterator<Item = Result<PioCommandWord, ExecutorError>>,
@@ -171,6 +200,7 @@ impl StreamingDmaExecutor {
             output_gpios,
             clock_divisor,
             timeout_us,
+            initial_setup_guard_us,
             statistics: StreamingStatistics::default(),
         })
     }
@@ -214,17 +244,19 @@ where
         }
 
         match self.phase {
-            ExecutionPhase::Preloading { sm, .. }
-                if self.transfer.is_done() || !pio.irq0().raw().sm0_tx_not_full() =>
-            {
-                self.phase = ExecutionPhase::Running {
-                    sm: sm.start(),
-                    started_at: now,
-                };
-            }
-            ExecutionPhase::Preloading { started_at, .. } => {
-                if now.wrapping_sub(started_at) >= PRELOAD_TIMEOUT_US {
-                    return self.finish(Err(PioExecutionError::PreloadFailed));
+            ExecutionPhase::Preloading { sm, started_at } => {
+                let elapsed = now.wrapping_sub(started_at);
+                let ready = self.transfer.is_done() || !pio.irq0().raw().sm0_tx_not_full();
+                if ready && elapsed >= self.initial_setup_guard_us {
+                    self.phase = ExecutionPhase::Running {
+                        sm: sm.start(),
+                        started_at: now,
+                    };
+                } else {
+                    self.phase = ExecutionPhase::Preloading { sm, started_at };
+                    if !ready && elapsed >= PRELOAD_TIMEOUT_US {
+                        return self.finish(Err(PioExecutionError::PreloadFailed));
+                    }
                 }
             }
             ExecutionPhase::Running { started_at, .. } => {

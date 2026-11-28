@@ -97,6 +97,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "controller"
+version = "0.1.0"
+dependencies = [
+ "executor",
+ "planner",
+]
+
+[[package]]
 name = "cortex-m"
 version = "0.7.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -631,6 +639,7 @@ dependencies = [
 name = "pico2-step-dir"
 version = "0.1.0"
 dependencies = [
+ "controller",
  "cortex-m",
  "cortex-m-rt",
  "defmt",

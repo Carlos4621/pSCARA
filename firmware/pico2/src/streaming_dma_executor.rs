@@ -41,12 +41,21 @@ pub struct ActiveStreamingExecution<I> {
     output_gpios: [u8; 4],
     clock_divisor: u16,
     timeout_us: u64,
+    statistics: StreamingStatistics,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct StreamingStatistics {
+    pub refill_count: u64,
+    pub total_refill_us: u64,
+    pub max_refill_us: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StreamingExecutionReport {
     pub blocks_queued: usize,
     pub final_queued: bool,
+    pub statistics: StreamingStatistics,
     pub result: Result<(), PioExecutionError>,
 }
 
@@ -91,8 +100,8 @@ impl StreamingDmaExecutor {
         }
     }
 
-    /// Inicia la precarga con un iterador de `build_verified_pio_commands` o con
-    /// una única palabra END para una ejecución sin movimiento.
+    /// Inicia la precarga con instrucciones de `build_verified_pio_commands`,
+    /// del generador sintético verificado o con una única palabra END.
     pub fn start<I>(
         mut self,
         pio: &mut PIO<PIO0>,
@@ -162,6 +171,7 @@ impl StreamingDmaExecutor {
             output_gpios,
             clock_divisor,
             timeout_us,
+            statistics: StreamingStatistics::default(),
         })
     }
 }
@@ -183,10 +193,12 @@ impl<I> ActiveStreamingExecution<I>
 where
     I: Iterator<Item = Result<PioCommandWord, ExecutorError>>,
 {
+    #[allow(dead_code, reason = "disponible para las pruebas de cancelación")]
     pub fn status(&self) -> ExecutionStatus {
         self.phase.status()
     }
 
+    #[allow(dead_code, reason = "disponible para la supervisión de movimiento")]
     pub fn running_elapsed_us(&self, timer: &Timer<CopyableTimer0>) -> Option<u64> {
         self.phase.running_elapsed_us(timer)
     }
@@ -231,8 +243,19 @@ where
                 if now.wrapping_sub(started_at) >= self.timeout_us {
                     return self.finish(Err(PioExecutionError::Timeout));
                 }
-                if let Err(error) = self.transfer.refill_next(&mut self.reader) {
-                    return self.finish(Err(PioExecutionError::BlockRefill(error)));
+                let refill_started = timer.get_counter().ticks();
+                let refill_result = self.transfer.refill_next(&mut self.reader);
+                let refill_elapsed = timer.get_counter().ticks().wrapping_sub(refill_started);
+
+                match refill_result {
+                    Ok(Some(_)) => {
+                        self.statistics.refill_count += 1;
+                        self.statistics.total_refill_us += refill_elapsed;
+                        self.statistics.max_refill_us =
+                            self.statistics.max_refill_us.max(refill_elapsed);
+                    }
+                    Ok(None) => {}
+                    Err(error) => return self.finish(Err(PioExecutionError::BlockRefill(error))),
                 }
             }
         }
@@ -242,6 +265,10 @@ where
 
     /// Cancela la ejecución y recupera el ejecutor. Al interrumpir un movimiento,
     /// la posición mecánica final puede diferir de la posición planificada.
+    #[allow(
+        dead_code,
+        reason = "disponible para abortar una trayectoria desde el llamador"
+    )]
     pub fn cancel(self) -> (StreamingDmaExecutor, StreamingExecutionReport) {
         self.finalize(Err(PioExecutionError::Cancelled))
     }
@@ -261,6 +288,7 @@ where
             rx,
             output_gpios,
             clock_divisor,
+            statistics,
             ..
         } = self;
         let mut sm = match phase {
@@ -303,6 +331,7 @@ where
         let report = StreamingExecutionReport {
             blocks_queued,
             final_queued,
+            statistics,
             result,
         };
         (executor, report)

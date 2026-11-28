@@ -1,6 +1,7 @@
 #![no_std]
 #![no_main]
 
+mod benchmark;
 mod dma_command_buffer;
 #[allow(
     dead_code,
@@ -10,11 +11,13 @@ mod dma_executor;
 mod dma_pair;
 mod streaming_dma_executor;
 
+use benchmark::{
+    SYNTHETIC_INITIAL_LEVELS, measure_execution, prepare_commands, synthetic_step_commands,
+};
 use defmt_rtt as _;
 use dma_command_buffer::DmaCommandBuffer;
-use dma_executor::{ExecutionStatus, PioExecutionError};
 use embedded_hal::{delay::DelayNs, digital::OutputPin};
-use executor::{ExecutorError, PioCommandWord, PioExecutionConfig, build_verified_pio_commands};
+use executor::{PioCommandWord, PioExecutionConfig, build_pio_commands};
 use kinematics::JointAngles;
 use panic_probe as _;
 use planner::{
@@ -28,18 +31,16 @@ use rp235x_hal::{
     dma::DMAExt,
     entry,
     gpio::{FunctionPio0, PinState as GpioPinState},
-    pac::{self, PIO0},
-    pio::{PIO, PIOExt},
-    timer::{CopyableTimer0, Timer},
+    pac,
+    pio::PIOExt,
 };
-use streaming_dma_executor::{ActiveStreamingExecution, StreamingDmaExecutor, StreamingPoll};
+use streaming_dma_executor::StreamingDmaExecutor;
 
 const XOSC_HZ: u32 = 12_000_000;
 const PIO_HZ: u32 = 1_000_000;
-const BLOCK_CAPACITY: usize = 5;
-const SUPERVISION_TIMEOUT_US: u64 = 6_000_000;
-const SHORT_TIMEOUT_US: u64 = 1_000;
-const PRELOAD_CANCEL_DELAY_US: u32 = 100;
+const BLOCK_CAPACITY: usize = 128;
+const PULSE_COUNT: usize = 10_000;
+const PREPARED_CAPACITY: usize = 8_192;
 const BENCH_SEPARATION_MS: u32 = 1_000;
 
 #[unsafe(link_section = ".start_block")]
@@ -53,10 +54,10 @@ static PICOTOOL_ENTRIES: [hal::binary_info::EntryAddr; 3] = [
     hal::binary_info::rp_cargo_version!(),
     #[cfg(feature = "adafruit-feather-rp2350")]
     hal::binary_info::rp_program_description!(
-        c"SCARA planned STEP/DIR bench test (Adafruit Feather RP2350, A0-A3)"
+        c"SCARA STEP/DIR performance benchmark (Adafruit Feather RP2350, A0-A3)"
     ),
     #[cfg(not(feature = "adafruit-feather-rp2350"))]
-    hal::binary_info::rp_program_description!(c"SCARA planned STEP/DIR bench test"),
+    hal::binary_info::rp_program_description!(c"SCARA STEP/DIR performance benchmark"),
 ];
 
 #[entry]
@@ -117,7 +118,6 @@ fn main() -> ! {
     let _dir_2 = dir_2.into_function::<FunctionPio0>();
     step_1.set_input_enable(true);
     step_2.set_input_enable(true);
-    let step_masks = [1u32 << output_gpios[0], 1u32 << output_gpios[2]];
 
     let (mut pio, sm0, _, _, _) = pac.PIO0.split(&mut pac.RESETS);
     let program = pio_proc::pio_file!(
@@ -139,190 +139,133 @@ fn main() -> ! {
         divisor,
     );
 
-    let points = [
-        JointAngles::new(0.0, 0.0).unwrap(),
-        JointAngles::new(0.25, -0.25).unwrap(),
-        JointAngles::new(0.50, -0.50).unwrap(),
-        JointAngles::new(0.75, -0.75).unwrap(),
-        JointAngles::new(1.00, -1.00).unwrap(),
-    ];
+    defmt::info!("DMA/PIO sintetico: {} pulsos por motor", PULSE_COUNT);
+    for frequency in [1_000u64, 5_000, 10_000, 20_000, 50_000] {
+        let half_period_cycles = u64::from(PIO_HZ) / (2 * frequency);
+        defmt::info!(
+            "Frecuencia solicitada={} Hz, semiperiodo={} ciclos",
+            frequency,
+            half_period_cycles
+        );
+        match synthetic_step_commands(PULSE_COUNT, half_period_cycles) {
+            Ok(commands) => {
+                executor = measure_execution(
+                    executor,
+                    &mut pio,
+                    &timer,
+                    commands,
+                    SYNTHETIC_INITIAL_LEVELS,
+                );
+            }
+            Err(error) => defmt::warn!(
+                "Generacion sintetica fallida: {:?}",
+                defmt::Debug2Format(&error)
+            ),
+        }
+        timer.delay_ms(BENCH_SEPARATION_MS);
+    }
+
     let config = PioExecutionConfig {
-        timebase: StepTimeBase::new(8).unwrap(),
-        timing: StepDirTiming::new(125_000_000, 125_000_000, 1, 1).unwrap(),
+        timebase: StepTimeBase::new(100_000).unwrap(),
+        timing: StepDirTiming::new(10_000, 10_000, 10_000, 10_000).unwrap(),
         pio_frequency_hz: u64::from(PIO_HZ),
         initial_first_direction: StepDirection::Negative,
         initial_second_direction: StepDirection::Positive,
         first_positive_is_high: true,
         second_positive_is_high: true,
     };
+    let steps_per_radian = (200.0 * 16.0 * 4.0) / core::f64::consts::TAU;
+    let converter = JointToStepsConverter::new(steps_per_radian, steps_per_radian).unwrap();
+    let points = [
+        JointAngles::new(0.0, 0.0).unwrap(),
+        JointAngles::new(1.0, -0.75).unwrap(),
+    ];
+    let speeds = [0.0; 2];
+    let acceleration_limits = JointAccelerationLimits::new(10.0, 10.0).unwrap();
+    let mut boundaries = [0; 2];
+    let mut operations = [PinOperationBatch::new(0); 64];
+    let storage = cortex_m::singleton!(: [PioCommandWord; PREPARED_CAPACITY] =
+        [PioCommandWord::END; PREPARED_CAPACITY])
+    .unwrap();
 
-    let velocity_limits = JointVelocityLimits::new(10.0, 10.0).unwrap();
-    let acceleration_limits = JointAccelerationLimits::new(1.0, 1.0).unwrap();
-    let speeds = [0.0; 5];
-    let converter = JointToStepsConverter::new(8.0, 4.0).unwrap();
-
-    for (trajectory, case) in [
-        (&points[..3], BenchCase::CancelPreloading),
-        (&points[..3], BenchCase::CancelOnFirstStep),
-        (&points[..3], BenchCase::Timeout),
-        (
-            &points[..2],
-            BenchCase::Complete {
-                blocks: 2,
-                steps: [2, 1],
-            },
-        ),
-        (
-            &points[..3],
-            BenchCase::Complete {
-                blocks: 3,
-                steps: [4, 2],
-            },
-        ),
-        (
-            &points[..],
-            BenchCase::Complete {
-                blocks: 5,
-                steps: [8, 4],
-            },
-        ),
-    ] {
-        let path = CoordinatedJointPathProfiles::new(
-            trajectory,
-            &speeds[..trajectory.len()],
+    defmt::info!("Planificador: {} micropasos/rad", steps_per_radian);
+    for velocity in [0.5, 1.0, 2.0, 4.0] {
+        defmt::info!("Limite de velocidad={} rad/s", velocity);
+        let velocity_limits = JointVelocityLimits::new(velocity, velocity).unwrap();
+        let profiles = match CoordinatedJointPathProfiles::new(
+            &points,
+            &speeds,
             &velocity_limits,
             &acceleration_limits,
         )
-        .unwrap();
-        let profiles = TimedCoordinatedJointPathProfiles::new(path).unwrap();
-        let mut boundaries = [0; 5];
-        let mut operations = [PinOperationBatch::new(0); 16];
-        let commands = build_verified_pio_commands(
+        .and_then(TimedCoordinatedJointPathProfiles::new)
+        {
+            Ok(profiles) => profiles,
+            Err(error) => {
+                defmt::warn!(
+                    "Construccion de perfiles fallida: {:?}",
+                    defmt::Debug2Format(&error)
+                );
+                continue;
+            }
+        };
+
+        let preparation_started = timer.get_counter().ticks();
+        let commands = build_pio_commands(
             profiles,
             converter,
             config,
             &mut boundaries,
             &mut operations,
-        )
-        .expect("no se pudieron verificar las palabras PIO");
-        let timeout_us = if matches!(case, BenchCase::Timeout) {
-            SHORT_TIMEOUT_US
-        } else {
-            SUPERVISION_TIMEOUT_US
+        );
+        let Some(prepared) = prepare_commands(storage, commands) else {
+            continue;
         };
-        let active = executor
-            .start(
-                &mut pio,
-                &timer,
-                commands,
-                config.initial_levels(),
-                timeout_us,
-            )
-            .unwrap_or_else(|(_, error)| panic!("Error de inicio: {error:?}"));
-        executor = check_bench_execution(active, &mut pio, &mut timer, step_masks, case);
+        let preparation_elapsed = timer
+            .get_counter()
+            .ticks()
+            .wrapping_sub(preparation_started);
+        defmt::info!(
+            "Preparacion y verificacion={} us, palabras={}",
+            preparation_elapsed,
+            prepared.len()
+        );
+
+        defmt::info!("Trayectoria con generacion durante la ejecucion");
+        match build_pio_commands(
+            profiles,
+            converter,
+            config,
+            &mut boundaries,
+            &mut operations,
+        ) {
+            Ok(commands) => {
+                executor = measure_execution(
+                    executor,
+                    &mut pio,
+                    &timer,
+                    commands,
+                    config.initial_levels(),
+                );
+            }
+            Err(error) => defmt::warn!("Reconstruccion fallida: {:?}", defmt::Debug2Format(&error)),
+        }
+        timer.delay_ms(BENCH_SEPARATION_MS);
+
+        defmt::info!("Trayectoria con palabras preparadas en RAM");
+        executor = measure_execution(
+            executor,
+            &mut pio,
+            &timer,
+            prepared.iter().copied().map(Ok),
+            config.initial_levels(),
+        );
         timer.delay_ms(BENCH_SEPARATION_MS);
     }
 
-    let active = executor
-        .start(
-            &mut pio,
-            &timer,
-            core::iter::once(Ok(PioCommandWord::END)),
-            config.initial_levels(),
-            SUPERVISION_TIMEOUT_US,
-        )
-        .unwrap_or_else(|(_, error)| panic!("Error de inicio: {error:?}"));
-    let _executor = check_bench_execution(
-        active,
-        &mut pio,
-        &mut timer,
-        step_masks,
-        BenchCase::Complete {
-            blocks: 1,
-            steps: [0, 0],
-        },
-    );
-
+    defmt::info!("Benchmark terminado");
     led.set_high().unwrap();
     loop {
         cortex_m::asm::wfi();
     }
-}
-
-enum BenchCase {
-    CancelPreloading,
-    CancelOnFirstStep,
-    Timeout,
-    Complete { blocks: usize, steps: [u32; 2] },
-}
-
-fn check_bench_execution<I>(
-    mut active: ActiveStreamingExecution<I>,
-    pio: &mut PIO<PIO0>,
-    timer: &mut Timer<CopyableTimer0>,
-    step_masks: [u32; 2],
-    case: BenchCase,
-) -> StreamingDmaExecutor
-where
-    I: Iterator<Item = Result<PioCommandWord, ExecutorError>>,
-{
-    assert_eq!(active.status(), ExecutionStatus::Preloading);
-    assert_eq!(active.running_elapsed_us(timer), None);
-    let step_mask = step_masks[0] | step_masks[1];
-    let mut observed_steps = [0; 2];
-    let (executor, report) = if matches!(case, BenchCase::CancelPreloading) {
-        // Dar tiempo a DMA para llenar la FIFO mientras la máquina PIO sigue detenida.
-        timer.delay_us(PRELOAD_CANCEL_DELAY_US);
-        assert_eq!(hal::Sio::read_bank0() & step_mask, 0);
-        active.cancel()
-    } else {
-        let mut previous = hal::Sio::read_bank0();
-        loop {
-            let pins = hal::Sio::read_bank0();
-            let rising = pins & !previous;
-            previous = pins;
-            for (count, mask) in observed_steps.iter_mut().zip(step_masks) {
-                *count += u32::from(rising & mask != 0);
-            }
-
-            if matches!(case, BenchCase::CancelOnFirstStep) && rising & step_mask != 0 {
-                assert_eq!(active.status(), ExecutionStatus::Running);
-                assert!(active.running_elapsed_us(timer).is_some());
-                break active.cancel();
-            }
-
-            match active.poll(pio, timer) {
-                StreamingPoll::Pending(next) => active = next,
-                StreamingPoll::Finished { executor, report } => break (executor, report),
-            }
-        }
-    };
-
-    assert_eq!(hal::Sio::read_bank0() & step_mask, 0);
-    match case {
-        BenchCase::CancelPreloading => {
-            assert_eq!(report.result, Err(PioExecutionError::Cancelled));
-            assert_eq!(report.blocks_queued, 2);
-            assert!(!report.final_queued);
-            defmt::info!("Cancelación durante la precarga verificada");
-        }
-        BenchCase::CancelOnFirstStep => {
-            assert_eq!(report.result, Err(PioExecutionError::Cancelled));
-            assert_ne!(observed_steps, [0, 0]);
-            defmt::info!("Cancelación durante el movimiento verificada");
-        }
-        BenchCase::Timeout => {
-            assert_eq!(report.result, Err(PioExecutionError::Timeout));
-            assert_eq!(observed_steps, [0, 0]);
-            defmt::info!("Tiempo límite insuficiente verificado");
-        }
-        BenchCase::Complete { blocks, steps } => {
-            assert_eq!(report.result, Ok(()));
-            assert!(report.final_queued);
-            assert_eq!(report.blocks_queued, blocks);
-            assert_eq!(observed_steps, steps);
-            defmt::info!("Ejecución de {} bloques verificada", report.blocks_queued);
-        }
-    }
-    executor
 }

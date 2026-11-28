@@ -4,6 +4,69 @@ fn power_of_two(exponent: i32) -> f64 {
     libm::scalbn(1.0, exponent)
 }
 
+fn assert_ratio_matches_reference(numerators: &[f64], denominators: &[f64]) {
+    let (expected_fraction, expected_exponent) = ratio_parts_reference(numerators, denominators);
+    let (fraction, exponent) = ratio_parts(numerators, denominators);
+    assert_eq!(
+        (fraction.to_bits(), exponent),
+        (expected_fraction.to_bits(), expected_exponent),
+        "numerators={numerators:?}, denominators={denominators:?}"
+    );
+}
+
+#[test]
+fn optimized_ratio_matches_reference_at_finite_boundaries() {
+    let values = [
+        -f64::MAX,
+        -2.0,
+        -1.0,
+        -0.0,
+        0.0,
+        f64::from_bits(1),
+        f64::MIN_POSITIVE,
+        0.5,
+        1.0,
+        2.0,
+        f64::MAX,
+    ];
+    let divisors = [
+        f64::from_bits(1),
+        f64::MIN_POSITIVE,
+        0.5,
+        1.0,
+        2.0,
+        f64::MAX,
+    ];
+
+    for a in values {
+        for b in divisors {
+            for c in divisors {
+                assert_ratio_matches_reference(&[a, b, c, b], &[b, c, b]);
+            }
+        }
+    }
+}
+
+#[test]
+fn optimized_ratio_preserves_uncancelled_factors_with_unequal_multiplicities() {
+    assert_ratio_matches_reference(&[], &[]);
+    assert_ratio_matches_reference(&[], &[2.3, 2.9, 3.1]);
+    assert_ratio_matches_reference(&[1.1, 1.3, 1.7], &[]);
+    assert_ratio_matches_reference(&[1.1, 1.3, 1.7], &[2.3, 2.9, 3.1]);
+    assert_ratio_matches_reference(&[1.1, 7.0, 1.3, 7.0, 1.7], &[2.3, 7.0, 2.9, 3.1]);
+    assert_ratio_matches_reference(&[1.1, 7.0, 1.3, 1.7], &[2.3, 7.0, 2.9, 7.0, 3.1]);
+}
+
+#[test]
+fn optimized_ratio_matches_reference_at_and_above_the_mask_capacity() {
+    let mut denominators = [2.0; 33];
+    denominators[31] = 3.0;
+    denominators[32] = 5.0;
+    assert_ratio_matches_reference(&[3.0], &denominators[..32]);
+    assert_ratio_matches_reference(&[2.0; 32], &denominators[..32]);
+    assert_ratio_matches_reference(&[5.0, 2.0], &denominators);
+}
+
 #[test]
 fn products_preserve_representable_results_despite_extreme_intermediate_scales() {
     for sign in [-1.0, 1.0] {

@@ -62,6 +62,21 @@ where
     }
 }
 
+/// FNV-1a de los bytes little-endian de cada palabra, incluido END.
+pub fn command_checksum(commands: &[PioCommandWord]) -> u64 {
+    const OFFSET: u64 = 0xcbf29ce484222325;
+    const PRIME: u64 = 0x100000001b3;
+
+    let mut hash = OFFSET;
+    for command in commands {
+        for byte in command.bits().to_le_bytes() {
+            hash ^= u64::from(byte);
+            hash = hash.wrapping_mul(PRIME);
+        }
+    }
+    hash
+}
+
 pub fn measure_execution<I>(
     executor: StreamingDmaExecutor,
     pio: &mut PIO<PIO0>,

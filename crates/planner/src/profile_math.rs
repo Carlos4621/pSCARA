@@ -2,6 +2,42 @@
 // two. Only the final result is rounded into the f64 exponent range.
 // All denominators at the call sites are strictly positive.
 fn ratio_parts(numerators: &[f64], denominators: &[f64]) -> (f64, i32) {
+    if denominators.len() > u32::BITS as usize {
+        return ratio_parts_reference(numerators, denominators);
+    }
+
+    let mut fraction = 1.0;
+    let mut exponent = 0;
+    let mut cancelled = 0u32;
+
+    'numerators: for &value in numerators {
+        // Cancel the first available equal denominator, preserving factor order.
+        for (index, &denominator) in denominators.iter().enumerate() {
+            let bit = 1u32 << index;
+            if cancelled & bit == 0 && value == denominator {
+                cancelled |= bit;
+                continue 'numerators;
+            }
+        }
+
+        let (part, power) = libm::frexp(value);
+        fraction *= part;
+        exponent += power;
+    }
+    for (index, &value) in denominators.iter().enumerate() {
+        if cancelled & (1u32 << index) != 0 {
+            continue;
+        }
+
+        let (part, power) = libm::frexp(value);
+        fraction /= part;
+        exponent -= power;
+    }
+
+    (fraction, exponent)
+}
+
+fn ratio_parts_reference(numerators: &[f64], denominators: &[f64]) -> (f64, i32) {
     let mut fraction = 1.0;
     let mut exponent = 0;
 

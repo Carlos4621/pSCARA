@@ -21,6 +21,16 @@ impl StepTimeBase {
     /// Convierte ticks a segundos como el `f64` más cercano al cociente exacto.
     /// En caso de empate, elige el valor con significando par.
     pub fn ticks_to_seconds(&self, ticks: u64) -> f64 {
+        const MAX_EXACT_INTEGER: u64 = 1u64 << 53;
+
+        if ticks <= MAX_EXACT_INTEGER && self.ticks_per_second <= MAX_EXACT_INTEGER {
+            return ticks as f64 / self.ticks_per_second as f64;
+        }
+
+        self.ticks_to_seconds_exact(ticks)
+    }
+
+    fn ticks_to_seconds_exact(&self, ticks: u64) -> f64 {
         if ticks == 0 {
             return 0.0;
         }
@@ -125,3 +135,7 @@ impl StepTimeBase {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "../tests/unit/step_time_base.rs"]
+mod tests;

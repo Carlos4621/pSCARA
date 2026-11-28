@@ -22,7 +22,8 @@ mod wokwi_test;
 
 #[cfg(not(feature = "wokwi-test"))]
 use benchmark::{
-    SYNTHETIC_INITIAL_LEVELS, measure_execution, prepare_commands, synthetic_step_commands,
+    SYNTHETIC_INITIAL_LEVELS, command_checksum, measure_execution, prepare_commands,
+    synthetic_step_commands,
 };
 use defmt_rtt as _;
 #[cfg(not(feature = "wokwi-pio-test"))]
@@ -302,6 +303,7 @@ fn run_benchmark(
             preparation_elapsed,
             prepared.len()
         );
+        defmt::info!("Checksum PIO={}", command_checksum(prepared));
 
         defmt::info!("Trayectoria con generacion durante la ejecucion");
         match build_pio_commands(

@@ -1,43 +1,102 @@
 use crate::{
     CachedTrajectoryPositionSampler, CoordinatedJointTrajectory, JointToStepsConverter, MotorSteps,
     PlannerError, SegmentedTrajectoryStepEventIterator, StepDirEvent, StepDirTiming, StepDirection,
-    StepTimeBase, TimedCoordinatedJointPathProfiles, build_segmented_step_events,
-    into_step_dir_events, validate_step_dir_intervals, validate_step_dir_schedule,
+    StepTimeBase, StepTransitionSearch, TimedCoordinatedJointPathProfiles,
+    build_segmented_step_events, into_step_dir_events, validate_step_dir_intervals,
+    validate_step_dir_schedule,
 };
+#[cfg(feature = "transition-hinted")]
+use crate::{MotorStepMove, find_first_transition_tick_hinted};
+
+#[cfg(feature = "transition-hinted")]
+struct TrajectoryTransitionSearch<'a> {
+    sampler: CachedTrajectoryPositionSampler<'a>,
+    converter: JointToStepsConverter,
+    timebase: StepTimeBase,
+}
+
+#[cfg(feature = "transition-hinted")]
+impl TrajectoryTransitionSearch<'_> {
+    fn position_at_tick(&mut self, tick: u64) -> Result<MotorSteps, PlannerError> {
+        let angles = self
+            .sampler
+            .position_at_clamped(self.timebase.ticks_to_seconds(tick))?;
+        self.converter.convert(angles)
+    }
+}
+
+#[cfg(feature = "transition-hinted")]
+impl StepTransitionSearch for TrajectoryTransitionSearch<'_> {
+    fn find_transition(
+        &mut self,
+        start_tick: u64,
+        end_tick: u64,
+        initial_position: MotorSteps,
+    ) -> Result<Option<(u64, MotorStepMove)>, PlannerError> {
+        let hint = self.sampler.estimate_transition_tick(
+            start_tick,
+            end_tick,
+            initial_position,
+            &self.converter,
+            self.timebase,
+        );
+        find_first_transition_tick_hinted(start_tick, end_tick, initial_position, hint, |tick| {
+            self.position_at_tick(tick)
+        })
+    }
+}
 
 pub fn build_trajectory_step_events<'a>(
     profiles: TimedCoordinatedJointPathProfiles<'a>,
     converter: JointToStepsConverter,
     timebase: StepTimeBase,
     boundaries_buffer: &'a mut [u64],
-) -> Result<
-    SegmentedTrajectoryStepEventIterator<'a, impl FnMut(u64) -> Result<MotorSteps, PlannerError>>,
-    PlannerError,
-> {
+) -> Result<SegmentedTrajectoryStepEventIterator<'a, impl StepTransitionSearch + 'a>, PlannerError>
+{
     let trajectory = CoordinatedJointTrajectory::new(profiles)?;
 
     validate_motor_position_range(profiles, &converter)?;
     validate_subtick_boundaries(profiles, &trajectory, &converter, timebase)?;
     validate_step_frequencies(profiles, &converter, timebase)?;
 
-    let mut sampler = CachedTrajectoryPositionSampler::new(trajectory);
-    let mut position_at_tick = move |tick: u64| -> Result<MotorSteps, PlannerError> {
-        let time = timebase.ticks_to_seconds(tick);
+    #[cfg(feature = "transition-hinted")]
+    {
+        let mut search = TrajectoryTransitionSearch {
+            sampler: CachedTrajectoryPositionSampler::new(trajectory),
+            converter,
+            timebase,
+        };
+        let initial_position = search.position_at_tick(0)?;
+        build_segmented_step_events(
+            profiles,
+            timebase,
+            boundaries_buffer,
+            initial_position,
+            search,
+        )
+    }
 
-        let angles = sampler.position_at_clamped(time)?;
+    #[cfg(not(feature = "transition-hinted"))]
+    {
+        let mut sampler = CachedTrajectoryPositionSampler::new(trajectory);
+        let mut position_at_tick = move |tick: u64| -> Result<MotorSteps, PlannerError> {
+            let time = timebase.ticks_to_seconds(tick);
 
-        converter.convert(angles)
-    };
+            let angles = sampler.position_at_clamped(time)?;
 
-    let initial_position = position_at_tick(0)?;
+            converter.convert(angles)
+        };
 
-    build_segmented_step_events(
-        profiles,
-        timebase,
-        boundaries_buffer,
-        initial_position,
-        position_at_tick,
-    )
+        let initial_position = position_at_tick(0)?;
+
+        build_segmented_step_events(
+            profiles,
+            timebase,
+            boundaries_buffer,
+            initial_position,
+            position_at_tick,
+        )
+    }
 }
 
 /// Comprueba que la trayectoria pueda generar todos sus eventos STEP.
@@ -65,10 +124,8 @@ pub fn build_verified_trajectory_step_events<'a>(
     converter: JointToStepsConverter,
     timebase: StepTimeBase,
     boundaries_buffer: &'a mut [u64],
-) -> Result<
-    SegmentedTrajectoryStepEventIterator<'a, impl FnMut(u64) -> Result<MotorSteps, PlannerError>>,
-    PlannerError,
-> {
+) -> Result<SegmentedTrajectoryStepEventIterator<'a, impl StepTransitionSearch + 'a>, PlannerError>
+{
     preflight_trajectory_step_events(profiles, converter, timebase, boundaries_buffer)?;
     build_trajectory_step_events(profiles, converter, timebase, boundaries_buffer)
 }

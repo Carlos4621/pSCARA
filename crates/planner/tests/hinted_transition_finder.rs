@@ -35,7 +35,22 @@ fn exact_hints_confirm_both_motors_with_one_or_two_samples() {
 }
 
 #[test]
-fn wrong_and_unusable_hints_fall_back_to_the_exponential_probes() {
+fn hinted_search_checks_neighboring_ticks() {
+    let initial = steps(0, 0);
+    let target = steps(1, -1);
+    for (hint, expected_probes) in [(49, &[49, 50][..]), (50, &[50, 49]), (51, &[51, 50, 49])] {
+        let mut probes = Vec::new();
+        let event = find_first_transition_tick_hinted(0, 100, initial, Some(hint), |tick| {
+            probes.push(tick);
+            Ok(if tick < 50 { initial } else { target })
+        });
+        assert_eq!(event, Ok(Some((50, MotorStepMove::new(initial, target)))));
+        assert_eq!(probes, expected_probes);
+    }
+}
+
+#[test]
+fn wrong_hints_fall_back_after_checking_the_clamped_tick_and_its_neighbors() {
     let start = 10;
     let end = 30;
     let initial = steps(0, 0);
@@ -46,12 +61,12 @@ fn wrong_and_unusable_hints_fall_back_to_the_exponential_probes() {
         sample(tick)
     });
     for (hint, prefix) in [
-        (Some(16), &[16][..]),
-        (Some(18), &[18, 17][..]),
+        (Some(15), &[15, 16][..]),
+        (Some(19), &[19, 18, 17][..]),
         (None, &[][..]),
-        (Some(start), &[][..]),
-        (Some(start - 1), &[][..]),
-        (Some(end + 1), &[][..]),
+        (Some(start), &[11, 12][..]),
+        (Some(start - 1), &[11, 12][..]),
+        (Some(end + 1), &[30, 29, 28][..]),
     ] {
         let mut probes = Vec::new();
         let actual = find_first_transition_tick_hinted(start, end, initial, hint, |tick| {
@@ -62,6 +77,40 @@ fn wrong_and_unusable_hints_fall_back_to_the_exponential_probes() {
         assert_eq!(&probes[..prefix.len()], prefix);
         assert_eq!(&probes[prefix.len()..], baseline);
     }
+}
+
+#[test]
+fn checks_neighbors_near_the_maximum_tick_and_can_rule_out_any_movement() {
+    let end = u64::MAX;
+    let start = end - 3;
+    let initial = steps(5, -3);
+    let target = steps(4, -2);
+    for (hint, expected_probes) in [
+        (0, &[end - 2, end - 1][..]),
+        (end - 1, &[end - 1, end - 2][..]),
+        (end, &[end, end - 1, end - 2][..]),
+    ] {
+        let mut probes = Vec::new();
+        let event = find_first_transition_tick_hinted(start, end, initial, Some(hint), |tick| {
+            probes.push(tick);
+            Ok(if tick < end - 1 { initial } else { target })
+        });
+        assert_eq!(
+            event,
+            Ok(Some((end - 1, MotorStepMove::new(initial, target))))
+        );
+        assert_eq!(probes, expected_probes);
+    }
+
+    let mut probes = Vec::new();
+    assert_eq!(
+        find_first_transition_tick_hinted(start, end, initial, Some(end), |tick| {
+            probes.push(tick);
+            Ok(initial)
+        }),
+        Ok(None)
+    );
+    assert_eq!(probes, [end]);
 }
 
 #[test]

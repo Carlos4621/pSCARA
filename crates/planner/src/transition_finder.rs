@@ -1,5 +1,34 @@
 use crate::{MotorStepMove, MotorSteps, PlannerError};
 
+/// Busca el primer movimiento en `(start_tick, end_tick]`.
+///
+/// `initial_position` es la posición conocida en `start_tick`. Si no hay
+/// movimiento, devuelve `Ok(None)`. Un movimiento encontrado debe tener a lo
+/// sumo un pulso por eje.
+pub trait StepTransitionSearch {
+    fn find_transition(
+        &mut self,
+        start_tick: u64,
+        end_tick: u64,
+        initial_position: MotorSteps,
+    ) -> Result<Option<(u64, MotorStepMove)>, PlannerError>;
+}
+
+impl<F> StepTransitionSearch for F
+where
+    F: FnMut(u64) -> Result<MotorSteps, PlannerError>,
+{
+    #[inline]
+    fn find_transition(
+        &mut self,
+        start_tick: u64,
+        end_tick: u64,
+        initial_position: MotorSteps,
+    ) -> Result<Option<(u64, MotorStepMove)>, PlannerError> {
+        find_first_transition_tick_exponential(start_tick, end_tick, initial_position, self)
+    }
+}
+
 /// Encuentra el primer tick en `(start_tick, end_tick]` cuya posición difiere
 /// de `initial_position`, la posición conocida en `start_tick`.
 ///
@@ -83,8 +112,8 @@ where
 }
 
 /// Comprueba una estimación de la primera transición en `(start_tick, end_tick]`.
-/// Si el tick estimado y el anterior no confirman la transición, usa la
-/// búsqueda exponencial. Requiere el mismo muestreo fuera de orden y que la
+/// Acota la estimación al intervalo, comprueba sus vecinos y recurre a la
+/// búsqueda exponencial si hace falta. Requiere muestreo fuera de orden y que la
 /// posición permanezca distinta de la inicial después de la transición.
 /// Propaga los errores de los ticks consultados, incluidos los de verificación.
 #[cfg(feature = "transition-estimation")]
@@ -105,21 +134,53 @@ where
         return Ok(None);
     }
 
-    if let Some(tick) = hint.filter(|&tick| start_tick < tick && tick <= end_tick) {
+    if let Some(hint) = hint {
+        let tick = hint.clamp(start_tick + 1, end_tick);
         let position = position_at_tick(tick)?;
-        if position != initial_position {
-            let previous_position = if tick - 1 == start_tick {
+
+        if position == initial_position {
+            if tick == end_tick {
+                return Ok(None);
+            }
+            let next_position = position_at_tick(tick + 1)?;
+            if next_position != initial_position {
+                return bisect_transition(
+                    tick,
+                    tick + 1,
+                    initial_position,
+                    next_position,
+                    position_at_tick,
+                );
+            }
+        } else {
+            let previous_tick = tick - 1;
+            let previous_position = if previous_tick == start_tick {
                 initial_position
             } else {
-                position_at_tick(tick - 1)?
+                position_at_tick(previous_tick)?
             };
             if previous_position == initial_position {
-                // La ventana de un tick permite validar el movimiento sin volver a muestrear.
                 return bisect_transition(
-                    tick - 1,
+                    previous_tick,
                     tick,
                     initial_position,
                     position,
+                    position_at_tick,
+                );
+            }
+
+            // El tick anterior ya cambió, así que es posterior a start_tick.
+            let before_previous = if previous_tick - 1 == start_tick {
+                initial_position
+            } else {
+                position_at_tick(previous_tick - 1)?
+            };
+            if before_previous == initial_position {
+                return bisect_transition(
+                    previous_tick - 1,
+                    previous_tick,
+                    initial_position,
+                    previous_position,
                     position_at_tick,
                 );
             }

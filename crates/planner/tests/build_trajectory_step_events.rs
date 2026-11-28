@@ -35,6 +35,59 @@ fn timed_path<'a>(
     TimedCoordinatedJointPathProfiles::new(path).unwrap()
 }
 
+#[cfg(feature = "transition-hinted")]
+#[test]
+fn integrated_estimates_match_exponential_search_across_off_grid_reversals()
+-> Result<(), PlannerError> {
+    let points = points([
+        [0.0, 0.0],
+        [0.3125, -0.15625],
+        [0.625, -0.3125],
+        [1.0, -0.5],
+        [0.625, -0.3125],
+        [0.125, -0.0625],
+    ]);
+    let limits = limits();
+    // El segundo perfil tiene velocidades de entrada y salida no nulas.
+    let timed = timed_path(&points, &[0.0, 0.25, 0.375, 0.0, 0.25, 0.0], &limits);
+    let timebase = StepTimeBase::new(128)?;
+    let converter = JointToStepsConverter::new(32.0, 64.0)?;
+    let mut off_grid_boundaries = 0;
+    for profile in timed.take(points.len() - 2) {
+        let (lower, upper) = timebase.bracketing_ticks(profile?.end_time()?)?;
+        off_grid_boundaries += usize::from(lower != upper);
+    }
+    assert!(off_grid_boundaries > 0);
+
+    let trajectory = CoordinatedJointTrajectory::new(timed)?;
+    let sample =
+        |tick| converter.convert(trajectory.position_at_clamped(timebase.ticks_to_seconds(tick))?);
+    let mut exponential_boundaries = [0; 12];
+    let expected = planner::build_segmented_step_events(
+        timed,
+        timebase,
+        &mut exponential_boundaries,
+        sample(0)?,
+        sample,
+    )?
+    .collect::<Result<Vec<_>, _>>()?;
+    let mut hinted_boundaries = [0; 12];
+    let actual =
+        build_verified_trajectory_step_events(timed, converter, timebase, &mut hinted_boundaries)?
+            .collect::<Result<Vec<_>, _>>()?;
+
+    assert_eq!(hinted_boundaries, exponential_boundaries);
+    assert_eq!(actual, expected);
+    for direction in [StepDirection::Positive, StepDirection::Negative] {
+        assert!(actual.iter().any(|(_, movement)| {
+            let first = movement.first();
+            let second = movement.second();
+            first.pulses == 1 && first.direction == direction && second.pulses == 1
+        }));
+    }
+    Ok(())
+}
+
 #[test]
 fn builds_a_two_motor_round_trip_from_a_nonzero_initial_position() -> Result<(), PlannerError> {
     let points = points([[1.0, -0.5], [2.0, -1.0], [1.0, -0.5]]);

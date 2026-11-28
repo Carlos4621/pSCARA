@@ -1,5 +1,7 @@
 use kinematics::JointAngles;
 
+#[cfg(feature = "transition-hinted")]
+use crate::{JointToStepsConverter, MotorSteps, StepTimeBase};
 use crate::{PlannerError, TimedCoordinatedJointPathProfiles, TimedCoordinatedJointProfile};
 
 #[derive(Debug, Clone, Copy)]
@@ -82,6 +84,28 @@ impl<'a> CachedTrajectoryPositionSampler<'a> {
             cached_profile: None,
             cached_end_time: 0.0,
         }
+    }
+
+    #[cfg(feature = "transition-hinted")]
+    pub(crate) fn estimate_transition_tick(
+        &self,
+        start_tick: u64,
+        end_tick: u64,
+        position: MotorSteps,
+        converter: &JointToStepsConverter,
+        timebase: StepTimeBase,
+    ) -> Option<u64> {
+        let profile = self.cached_profile.as_ref()?;
+        let start_time = timebase
+            .ticks_to_seconds(start_tick)
+            .min(self.trajectory.end_time);
+        let end_time = timebase
+            .ticks_to_seconds(end_tick)
+            .min(self.trajectory.end_time);
+        if start_time < profile.start_time() || end_time > self.cached_end_time {
+            return None;
+        }
+        profile.estimate_next_step_tick(converter, position, timebase)
     }
 
     /// Limita los tiempos finitos posteriores al final al último instante de la trayectoria.

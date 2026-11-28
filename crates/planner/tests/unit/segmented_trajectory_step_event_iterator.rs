@@ -122,9 +122,9 @@ fn retains_the_sampler_without_consuming_its_state() {
         })
         .unwrap();
 
-    assert_eq!((iterator.position_at_tick)(16), Ok(first_sample));
+    assert_eq!((iterator.transition_search)(16), Ok(first_sample));
     assert_eq!(
-        (iterator.position_at_tick)(17),
+        (iterator.transition_search)(17),
         Err(PlannerError::InvalidTime)
     );
 }

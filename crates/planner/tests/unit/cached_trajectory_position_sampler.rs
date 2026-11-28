@@ -148,3 +148,50 @@ fn a_suffix_or_exhausted_source_matches_stateless_position_queries() {
         assert!(sampler.cached_profile.is_none());
     }
 }
+
+#[cfg(feature = "transition-hinted")]
+#[test]
+fn transition_estimates_require_the_cached_profile_to_cover_the_interval() {
+    let points = [0.0, 1.0, 2.0].map(|angle| JointAngles::new(angle, 0.0).unwrap());
+    let velocity = JointVelocityLimits::new(10.0, 10.0).unwrap();
+    let acceleration = JointAccelerationLimits::new(1.0, 1.0).unwrap();
+    let timed = timed_path(&points, &[0.0; 3], &velocity, &acceleration);
+    let trajectory = CoordinatedJointTrajectory::new(timed).unwrap();
+    let mut sampler = CachedTrajectoryPositionSampler::new(trajectory);
+    let converter = JointToStepsConverter::new(8.0, 8.0).unwrap();
+    let timebase = StepTimeBase::new(10).unwrap();
+    let initial = MotorSteps {
+        first: 0,
+        second: 0,
+    };
+
+    assert_eq!(
+        sampler.estimate_transition_tick(0, 20, initial, &converter, timebase),
+        None
+    );
+    sampler.position_at_clamped(0.0).unwrap();
+    assert!(
+        sampler
+            .estimate_transition_tick(0, 20, initial, &converter, timebase)
+            .is_some()
+    );
+    assert_eq!(
+        sampler.estimate_transition_tick(19, 21, initial, &converter, timebase),
+        None
+    );
+    assert_eq!(sampler.cached_end_time, 2.0);
+
+    let position = converter
+        .convert(sampler.position_at_clamped(3.0).unwrap())
+        .unwrap();
+    assert_eq!(
+        sampler.estimate_transition_tick(19, 30, position, &converter, timebase),
+        None
+    );
+    assert!(
+        sampler
+            .estimate_transition_tick(30, 41, position, &converter, timebase)
+            .is_some()
+    );
+    assert_eq!(sampler.cached_end_time, 4.0);
+}

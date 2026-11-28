@@ -1,8 +1,7 @@
 use core::iter::FusedIterator;
 
 use crate::{
-    MotorStepMove, MotorSteps, PlannerError, TrajectoryStepEventIterator,
-    find_first_transition_tick_exponential,
+    MotorStepMove, MotorSteps, PlannerError, StepTransitionSearch, TrajectoryStepEventIterator,
 };
 
 #[derive(Debug)]
@@ -13,7 +12,7 @@ pub struct SegmentedTrajectoryStepEventIterator<'a, F> {
     current_tick: u64,
     current_position: MotorSteps,
 
-    position_at_tick: F,
+    transition_search: F,
     finished: bool,
 }
 
@@ -21,7 +20,7 @@ impl<'a, F> SegmentedTrajectoryStepEventIterator<'a, F> {
     pub fn new(
         boundaries: &'a [u64],
         initial_position: MotorSteps,
-        position_at_tick: F,
+        transition_search: F,
     ) -> Result<Self, PlannerError> {
         if boundaries.len() < 2 {
             return Err(PlannerError::BoundariesWithoutFrontiers);
@@ -36,7 +35,7 @@ impl<'a, F> SegmentedTrajectoryStepEventIterator<'a, F> {
             segment_index: 0,
             current_tick: boundaries[0],
             current_position: initial_position,
-            position_at_tick,
+            transition_search,
             finished: false,
         })
     }
@@ -44,7 +43,7 @@ impl<'a, F> SegmentedTrajectoryStepEventIterator<'a, F> {
 
 impl<'a, F> Iterator for SegmentedTrajectoryStepEventIterator<'a, F>
 where
-    F: FnMut(u64) -> Result<MotorSteps, PlannerError>,
+    F: StepTransitionSearch,
 {
     type Item = Result<(u64, MotorStepMove), PlannerError>;
 
@@ -65,11 +64,10 @@ where
                 continue;
             }
 
-            let result = find_first_transition_tick_exponential(
+            let result = self.transition_search.find_transition(
                 self.current_tick,
                 end_tick,
                 self.current_position,
-                &mut self.position_at_tick,
             );
 
             match result {
@@ -102,10 +100,7 @@ where
     }
 }
 
-impl<F> FusedIterator for SegmentedTrajectoryStepEventIterator<'_, F> where
-    F: FnMut(u64) -> Result<MotorSteps, PlannerError>
-{
-}
+impl<F: StepTransitionSearch> FusedIterator for SegmentedTrajectoryStepEventIterator<'_, F> {}
 
 #[cfg(test)]
 #[path = "../tests/unit/segmented_trajectory_step_event_iterator.rs"]

@@ -6,6 +6,7 @@ edition = "2024"
 [features]
 default = ["transition-estimation"]
 transition-estimation = []
+transition-hinted = ["transition-estimation"]
 
 [dependencies]
 kinematics = { path = "../kinematics" }

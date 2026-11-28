@@ -46,6 +46,7 @@ pub fn measure(
     let mut hinted_cycles = 0u64;
     let mut exponential_samples = 0u64;
     let mut hinted_samples = 0u64;
+    let mut max_hinted_samples = 0u64;
 
     while tick < end_tick {
         let (estimate, estimate_elapsed) =
@@ -84,6 +85,7 @@ pub fn measure(
         hinted_cycles += u64::from(hinted_elapsed);
         exponential_samples += baseline_probes;
         hinted_samples += hinted_probes;
+        max_hinted_samples = max_hinted_samples.max(hinted_probes);
 
         tick = actual_tick;
         let angles = exponential_sampler.position_at_clamped(timebase.ticks_to_seconds(tick))?;
@@ -100,13 +102,14 @@ pub fn measure(
         stats.max_error_ticks,
     );
     defmt::info!(
-        "Coste: estimacion_ciclos={}, estimacion_maxima_ciclos={}, exponencial_ciclos={}, busqueda_con_estimacion_ciclos={}, muestras_exponencial={}, muestras_con_estimacion={}",
+        "Coste: estimacion_ciclos={}, estimacion_maxima_ciclos={}, exponencial_ciclos={}, busqueda_con_estimacion_ciclos={}, muestras_exponencial={}, muestras_con_estimacion={}, maximo_muestras_con_estimacion={}",
         estimate_cycles,
         max_estimate_cycles,
         exponential_cycles,
         hinted_cycles,
         exponential_samples,
         hinted_samples,
+        max_hinted_samples,
     );
     Ok(())
 }

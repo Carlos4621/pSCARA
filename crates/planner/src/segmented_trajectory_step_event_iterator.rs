@@ -2,7 +2,7 @@ use core::iter::FusedIterator;
 
 use crate::{
     MotorStepMove, MotorSteps, PlannerError, TrajectoryStepEventIterator,
-    find_first_transition_tick,
+    find_first_transition_tick_exponential,
 };
 
 #[derive(Debug)]
@@ -65,7 +65,7 @@ where
                 continue;
             }
 
-            let result = find_first_transition_tick(
+            let result = find_first_transition_tick_exponential(
                 self.current_tick,
                 end_tick,
                 self.current_position,

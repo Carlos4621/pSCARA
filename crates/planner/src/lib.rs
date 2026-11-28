@@ -131,7 +131,7 @@ mod step_transition_detector;
 pub use step_transition_detector::StepTransitionDetector;
 
 mod transition_finder;
-pub use transition_finder::find_first_transition_tick;
+pub use transition_finder::{find_first_transition_tick, find_first_transition_tick_exponential};
 
 mod trajectory_step_event_iterator;
 pub use trajectory_step_event_iterator::TrajectoryStepEventIterator;

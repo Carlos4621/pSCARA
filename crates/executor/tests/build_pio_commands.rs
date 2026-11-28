@@ -9,8 +9,8 @@ use planner::{
     JointToStepsConverter, JointVelocityLimits, PinOperationBatch, PinOperationBatchIterator,
     PlannerError, StepDirScheduleCursor, StepDirScheduleIterator, StepDirTiming,
     StepDirection::{Negative, Positive},
-    StepTimeBase, TimedCoordinatedJointPathProfiles, build_segmented_step_events,
-    into_step_dir_events, plan_joint_path_speeds,
+    StepTimeBase, TimedCoordinatedJointPathProfiles, TrajectoryStepEventIterator,
+    generate_guarded_segment_boundaries, into_step_dir_events, plan_joint_path_speeds,
 };
 
 const TWO_MOTOR_PATH: [[f64; 2]; 2] = [[0.0, 0.0], [0.25, -0.25]];
@@ -68,7 +68,7 @@ fn pico2_benchmark_config() -> PioExecutionConfig {
     }
 }
 
-fn uncached_words(
+fn uncached_binary_words(
     profiles: TimedCoordinatedJointPathProfiles<'_>,
     converter: JointToStepsConverter,
     config: PioExecutionConfig,
@@ -80,13 +80,18 @@ fn uncached_words(
     };
     let mut boundaries = [0; 8];
     let mut operations = [PinOperationBatch::new(0); 64];
-    let events = build_segmented_step_events(
-        profiles,
-        config.timebase,
-        &mut boundaries,
-        position_at_tick(0)?,
-        position_at_tick,
-    )?;
+    let count = generate_guarded_segment_boundaries(profiles, config.timebase, &mut boundaries)?;
+    let mut events = Vec::new();
+    // El iterador de un solo intervalo conserva la búsqueda binaria.
+    for pair in boundaries[..count].windows(2) {
+        let start = pair[0];
+        events.extend(TrajectoryStepEventIterator::new(
+            start,
+            pair[1],
+            position_at_tick(start)?,
+            position_at_tick,
+        )?);
+    }
     let cursor = StepDirScheduleCursor::new(
         config.timing,
         config.timebase,
@@ -94,7 +99,7 @@ fn uncached_words(
         Some(config.initial_second_direction),
     )?;
     let batches = PinOperationBatchIterator::new(
-        StepDirScheduleIterator::new(into_step_dir_events(events), cursor),
+        StepDirScheduleIterator::new(into_step_dir_events(events.into_iter()), cursor),
         config.timing.min_step_high_ticks(config.timebase)?,
         config.timing.min_dir_setup_ticks(config.timebase)?,
         &mut operations,
@@ -120,7 +125,7 @@ fn assert_same_pio_words(
     config: PioExecutionConfig,
     case: &str,
 ) -> Result<usize, ExecutorError> {
-    let expected = uncached_words(profiles, converter, config)?;
+    let expected = uncached_binary_words(profiles, converter, config)?;
     let mut boundaries = [0; 8];
     let mut operations = [PinOperationBatch::new(0); 64];
     let commands = build_pio_commands(
@@ -149,7 +154,8 @@ fn assert_same_pio_words(
 }
 
 #[test]
-fn cached_sampling_preserves_every_pio_word_of_the_pico2_benchmark() -> Result<(), ExecutorError> {
+fn optimized_sampling_preserves_every_pio_word_of_the_pico2_benchmark() -> Result<(), ExecutorError>
+{
     let points = points([[0.0, 0.0], [1.0, -0.75]]);
     let steps_per_radian = (200.0 * 16.0 * 4.0) / core::f64::consts::TAU;
     let converter = JointToStepsConverter::new(steps_per_radian, steps_per_radian)?;
@@ -169,7 +175,7 @@ fn cached_sampling_preserves_every_pio_word_of_the_pico2_benchmark() -> Result<(
 }
 
 #[test]
-fn cached_sampling_preserves_pio_words_through_moving_junctions_and_reversals()
+fn optimized_sampling_preserves_pio_words_through_moving_junctions_and_reversals()
 -> Result<(), ExecutorError> {
     let points = points([[0.0, 0.0], [0.25, -0.125], [0.5, -0.25], [0.25, 0.125]]);
     let limits = limits();

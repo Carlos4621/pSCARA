@@ -4,6 +4,8 @@ use crate::{
     JointAccelerationLimits, JointVelocityLimits, MotionProfile, PlannerError,
     profile_math::{product_ratio, products_equal},
 };
+#[cfg(feature = "transition-estimation")]
+use crate::{JointToStepsConverter, MotorSteps};
 
 #[derive(Debug)]
 pub struct CoordinatedJointMotionProfile {
@@ -82,6 +84,39 @@ impl CoordinatedJointMotionProfile {
         utilities::validate_finite(second_theta).map_err(|_| PlannerError::NumericalFailure)?;
 
         JointAngles::new(first_theta, second_theta).map_err(PlannerError::Kinematics)
+    }
+
+    #[cfg(feature = "transition-estimation")]
+    pub(crate) fn estimate_next_step_time(
+        &self,
+        converter: &JointToStepsConverter,
+        position: MotorSteps,
+    ) -> Option<f64> {
+        let (first, second) = converter.next_step_thresholds(
+            position,
+            self.first_displacement,
+            self.second_displacement,
+        );
+        let candidates = [
+            (first, self.start.first_theta(), self.first_displacement),
+            (second, self.start.second_theta(), self.second_displacement),
+        ];
+
+        let mut next_progress: Option<f64> = None;
+        for (threshold, start, displacement) in candidates {
+            let Some(threshold) = threshold else {
+                continue;
+            };
+            let progress = (threshold - start) / displacement;
+            if (0.0..=1.0).contains(&progress) {
+                next_progress = Some(match next_progress {
+                    Some(previous) => previous.min(progress),
+                    None => progress,
+                });
+            }
+        }
+        self.progress_profile
+            .estimate_time_at_distance(next_progress?)
     }
 
     pub fn velocity_at(&self, time: f64) -> Result<(f64, f64), PlannerError> {

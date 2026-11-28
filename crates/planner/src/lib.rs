@@ -131,6 +131,8 @@ mod step_transition_detector;
 pub use step_transition_detector::StepTransitionDetector;
 
 mod transition_finder;
+#[cfg(feature = "transition-estimation")]
+pub use transition_finder::{TransitionEstimationStatistics, find_first_transition_tick_hinted};
 pub use transition_finder::{find_first_transition_tick, find_first_transition_tick_exponential};
 
 mod trajectory_step_event_iterator;

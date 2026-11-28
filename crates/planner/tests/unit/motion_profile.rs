@@ -3,6 +3,63 @@ use super::*;
 #[path = "motion_profile_progress_limits.rs"]
 mod progress_limits;
 
+#[test]
+#[cfg(feature = "transition-estimation")]
+fn analytic_estimates_invert_position_in_each_phase_and_direction() {
+    for sign in [-1.0, 1.0] {
+        for (distance, acceleration, cap, initial, final_speed, sample_times) in [
+            (
+                4.0,
+                4.0,
+                8.0,
+                0.0,
+                0.0,
+                &[0.0, 0.25, 0.5, 1.0, 1.5, 2.0][..],
+            ),
+            (
+                20.0,
+                2.0,
+                5.0,
+                1.0,
+                3.0,
+                &[0.0, 1.0, 2.0, 2.5, 4.0, 4.5, 5.0][..],
+            ),
+        ] {
+            let profile = MotionProfile::with_boundary_speeds(
+                0.0,
+                sign * distance,
+                acceleration,
+                cap,
+                initial,
+                final_speed,
+            )
+            .unwrap();
+            for &time in sample_times {
+                let distance = profile.position_at(time).unwrap().abs();
+                let estimated = profile.estimate_time_at_distance(distance).unwrap();
+                assert!(
+                    (estimated - time).abs() <= 8.0 * f64::EPSILON,
+                    "{time} vs {estimated}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+#[cfg(feature = "transition-estimation")]
+fn analytic_estimates_skip_invalid_distances_and_overflowing_discriminants() {
+    let profile = MotionProfile::new(0.0, 1.0, f64::MAX, f64::MAX).unwrap();
+    for distance in [-1.0, 1.0_f64.next_up(), f64::NAN, f64::INFINITY, 0.25, 0.75] {
+        assert_eq!(profile.estimate_time_at_distance(distance), None);
+    }
+    assert_eq!(profile.estimate_time_at_distance(0.0), Some(0.0));
+    assert_eq!(
+        profile.estimate_time_at_distance(1.0),
+        Some(profile.total_time())
+    );
+}
+
 fn assert_unscaled_position_matches_scaled(profile: &MotionProfile, time: f64) {
     let expected = profile
         .position_at_scaled(time, profile.total_time())

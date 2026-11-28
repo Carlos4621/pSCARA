@@ -17,6 +17,8 @@ mod dma_executor;
 mod dma_pair;
 #[cfg(not(feature = "wokwi-pio-test"))]
 mod streaming_dma_executor;
+#[cfg(all(feature = "transition-estimation-bench", not(feature = "wokwi-test")))]
+mod transition_estimation_benchmark;
 #[cfg(feature = "wokwi-test")]
 mod wokwi_test;
 
@@ -212,6 +214,9 @@ fn run_benchmark(
     mut pio: hal::pio::PIO<pac::PIO0>,
     mut timer: hal::timer::Timer<hal::timer::CopyableTimer0>,
 ) {
+    #[cfg(feature = "transition-estimation-bench")]
+    transition_estimation_benchmark::enable_cycle_counter();
+
     defmt::info!("DMA/PIO sintetico: {} pulsos por motor", PULSE_COUNT);
     for frequency in [1_000u64, 5_000, 10_000, 20_000, 50_000] {
         let half_period_cycles = u64::from(PIO_HZ) / (2 * frequency);
@@ -334,6 +339,10 @@ fn run_benchmark(
             prepared.iter().copied().map(Ok),
             config.initial_levels(),
         );
+        #[cfg(feature = "transition-estimation-bench")]
+        transition_estimation_benchmark::measure(profiles, converter, config.timebase)
+            .expect("fallo al comparar las busquedas de transiciones");
+
         timer.delay_ms(BENCH_SEPARATION_MS);
     }
 

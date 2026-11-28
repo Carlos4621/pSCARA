@@ -13,13 +13,14 @@ bench = false
 [features]
 adafruit-feather-rp2350 = []
 dcp-accelerated = ["rp235x-hal/dcp-fast-f64"]
+transition-estimation-bench = ["planner/transition-estimation"]
 wokwi-test = ["dep:scara-wokwi"]
 wokwi-pio-test = ["wokwi-test"]
 
 [dependencies]
 executor = { path = "../../crates/executor" }
 kinematics = { path = "../../crates/kinematics" }
-planner = { path = "../../crates/planner" }
+planner = { path = "../../crates/planner", default-features = false }
 cortex-m = "0.7"
 cortex-m-rt = "0.7"
 embedded-hal = "1"

@@ -1,6 +1,8 @@
 use kinematics::JointAngles;
 
 use crate::{CoordinatedJointMotionProfile, PlannerError};
+#[cfg(feature = "transition-estimation")]
+use crate::{JointToStepsConverter, MotorSteps, StepTimeBase};
 
 #[derive(Debug)]
 pub struct TimedCoordinatedJointProfile {
@@ -33,6 +35,30 @@ impl TimedCoordinatedJointProfile {
 
     pub fn position_at(&self, global_time: f64) -> Result<JointAngles, PlannerError> {
         self.profile.position_at(self.get_local_time(global_time)?)
+    }
+
+    /// Estima el tick global del próximo micropaso a partir de una posición
+    /// cuantizada del perfil. El tick requiere verificación mediante muestreo.
+    #[cfg(feature = "transition-estimation")]
+    pub fn estimate_next_step_tick(
+        &self,
+        converter: &JointToStepsConverter,
+        position: MotorSteps,
+        timebase: StepTimeBase,
+    ) -> Option<u64> {
+        let time = self.estimate_next_step_time(converter, position)?;
+        timebase.seconds_to_ticks(time).ok()
+    }
+
+    #[cfg(feature = "transition-estimation")]
+    pub(crate) fn estimate_next_step_time(
+        &self,
+        converter: &JointToStepsConverter,
+        position: MotorSteps,
+    ) -> Option<f64> {
+        let local_time = self.profile.estimate_next_step_time(converter, position)?;
+        let global_time = self.start_time + local_time;
+        global_time.is_finite().then_some(global_time)
     }
 
     pub fn velocity_at(&self, global_time: f64) -> Result<(f64, f64), PlannerError> {

@@ -82,6 +82,53 @@ where
     }
 }
 
+/// Comprueba una estimación de la primera transición en `(start_tick, end_tick]`.
+/// Si el tick estimado y el anterior no confirman la transición, usa la
+/// búsqueda exponencial. Requiere el mismo muestreo fuera de orden y que la
+/// posición permanezca distinta de la inicial después de la transición.
+/// Propaga los errores de los ticks consultados, incluidos los de verificación.
+#[cfg(feature = "transition-estimation")]
+pub fn find_first_transition_tick_hinted<F>(
+    start_tick: u64,
+    end_tick: u64,
+    initial_position: MotorSteps,
+    hint: Option<u64>,
+    mut position_at_tick: F,
+) -> Result<Option<(u64, MotorStepMove)>, PlannerError>
+where
+    F: FnMut(u64) -> Result<MotorSteps, PlannerError>,
+{
+    if end_tick < start_tick {
+        return Err(PlannerError::EndBeforeStart);
+    }
+    if end_tick == start_tick {
+        return Ok(None);
+    }
+
+    if let Some(tick) = hint.filter(|&tick| start_tick < tick && tick <= end_tick) {
+        let position = position_at_tick(tick)?;
+        if position != initial_position {
+            let previous_position = if tick - 1 == start_tick {
+                initial_position
+            } else {
+                position_at_tick(tick - 1)?
+            };
+            if previous_position == initial_position {
+                // La ventana de un tick permite validar el movimiento sin volver a muestrear.
+                return bisect_transition(
+                    tick - 1,
+                    tick,
+                    initial_position,
+                    position,
+                    position_at_tick,
+                );
+            }
+        }
+    }
+
+    find_first_transition_tick_exponential(start_tick, end_tick, initial_position, position_at_tick)
+}
+
 fn bisect_transition<F>(
     mut left: u64,
     mut right: u64,
@@ -112,4 +159,33 @@ where
     }
 
     Ok(Some((right, movement)))
+}
+
+/// Compara estimaciones con los ticks verificados mediante muestreo.
+#[cfg(feature = "transition-estimation")]
+#[derive(Debug, Default)]
+pub struct TransitionEstimationStatistics {
+    pub transitions: u64,
+    pub estimates: u64,
+    pub exact_estimates: u64,
+    /// Incluye las estimaciones exactas.
+    pub estimates_within_one_tick: u64,
+    /// Incluye las estimaciones exactas y las que difieren un tick.
+    pub estimates_within_two_ticks: u64,
+    pub max_error_ticks: u64,
+}
+
+#[cfg(feature = "transition-estimation")]
+impl TransitionEstimationStatistics {
+    pub fn record(&mut self, actual_tick: u64, estimated_tick: Option<u64>) {
+        self.transitions += 1;
+        if let Some(estimated_tick) = estimated_tick {
+            let error = actual_tick.abs_diff(estimated_tick);
+            self.estimates += 1;
+            self.exact_estimates += u64::from(error == 0);
+            self.estimates_within_one_tick += u64::from(error <= 1);
+            self.estimates_within_two_ticks += u64::from(error <= 2);
+            self.max_error_ticks = self.max_error_ticks.max(error);
+        }
+    }
 }

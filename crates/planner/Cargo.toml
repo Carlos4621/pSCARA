@@ -3,6 +3,10 @@ name = "planner"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+default = ["transition-estimation"]
+transition-estimation = []
+
 [dependencies]
 kinematics = { path = "../kinematics" }
 libm = "0.2.16"

@@ -44,6 +44,27 @@ impl JointToStepsConverter {
         })
     }
 
+    #[cfg(feature = "transition-estimation")]
+    pub(crate) fn next_step_thresholds(
+        &self,
+        position: MotorSteps,
+        first_displacement: f64,
+        second_displacement: f64,
+    ) -> (Option<f64>, Option<f64>) {
+        (
+            next_step_threshold(
+                position.first,
+                first_displacement,
+                self.first_steps_per_radian,
+            ),
+            next_step_threshold(
+                position.second,
+                second_displacement,
+                self.second_steps_per_radian,
+            ),
+        )
+    }
+
     /// Convierte magnitudes de velocidad en rad/s a frecuencias en micropasos/s.
     pub fn peak_step_frequencies(
         &self,
@@ -67,3 +88,19 @@ impl JointToStepsConverter {
         value.is_finite() && value >= i64::MIN as f64 && value < i64::MAX as f64
     }
 }
+
+#[cfg(feature = "transition-estimation")]
+fn next_step_threshold(current_step: i64, displacement: f64, steps_per_radian: f64) -> Option<f64> {
+    const LIMIT: u64 = 1 << 52;
+    if current_step.unsigned_abs() >= LIMIT || !displacement.is_finite() || displacement == 0.0 {
+        return None;
+    }
+
+    let threshold = current_step as f64 + 0.5 * displacement.signum();
+    let angle = threshold / steps_per_radian;
+    angle.is_finite().then_some(angle)
+}
+
+#[cfg(all(test, feature = "transition-estimation"))]
+#[path = "../tests/unit/joint_to_steps_converter.rs"]
+mod tests;

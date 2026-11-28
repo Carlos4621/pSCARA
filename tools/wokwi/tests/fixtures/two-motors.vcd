@@ -1,0 +1,32 @@
+$timescale 1 us $end
+$scope module logic $end
+$var wire 1 a D0 $end
+$var wire 1 b D1 $end
+$var wire 1 c D2 $end
+$var wire 1 d D3 $end
+$var wire 1 e D4 $end
+$upscope $end
+$enddefinitions $end
+$dumpvars
+0a
+1b
+0c
+0d
+0e
+$end
+#5
+1e
+#20
+1a
+1c
+#30
+0a
+0c
+#45
+0b
+#60
+1a
+#70
+0a
+#180
+0e

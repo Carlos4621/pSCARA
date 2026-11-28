@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "parts": [
+    { "type": "board-pi-pico-2", "id": "pico", "top": 0, "left": 0, "attrs": {} },
+    {
+      "type": "wokwi-logic-analyzer",
+      "id": "logic",
+      "top": 0,
+      "left": 210,
+      "attrs": {}
+    }
+  ],
+  "connections": [
+    ["pico:GP2", "logic:D0", "orange", []],
+    ["pico:GP3", "logic:D1", "green", []],
+    ["pico:GP4", "logic:D2", "blue", []],
+    ["pico:GP5", "logic:D3", "purple", []],
+    ["pico:GP6", "logic:D4", "yellow", []],
+    ["pico:GND.2", "logic:GND", "black", []]
+  ]
+}

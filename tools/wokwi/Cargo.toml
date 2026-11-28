@@ -1,0 +1,20 @@
+[package]
+name = "scara-wokwi"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[features]
+default = ["host"]
+host = ["dep:vcd"]
+
+[[bin]]
+name = "scara-wokwi"
+required-features = ["host"]
+
+[dependencies]
+executor = { path = "../../crates/executor" }
+kinematics = { path = "../../crates/kinematics" }
+planner = { path = "../../crates/planner" }
+trajectory = { path = "../../crates/trajectory" }
+vcd = { version = "0.7", optional = true }

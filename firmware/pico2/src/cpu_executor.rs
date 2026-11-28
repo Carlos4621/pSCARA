@@ -10,7 +10,8 @@ use rp235x_hal::{
 
 const IRQ_END: u8 = 1 << 0;
 const IRQ_INVALID_COMMAND: u8 = 1 << 1;
-pub(super) const TX_FIFO_CAPACITY: usize = 8;
+// Wokwi marca TX como llena con cuatro palabras incluso con FJOIN_TX activo.
+const TX_FIFO_CAPACITY: usize = 4;
 const STEP_MASK: u8 = 0b0101;
 const LEVEL_MASK: u8 = 0b1111;
 
@@ -95,7 +96,7 @@ impl CpuExecutor {
             .out_shift_direction(ShiftDirection::Right)
             .autopull(false)
             .clock_divisor_fixed_point(clock_divisor, 0)
-            .buffers(Buffers::OnlyTx)
+            .buffers(Buffers::RxTx)
             .build(sm);
 
         sm.clear_fifos();

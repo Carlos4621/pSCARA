@@ -12,6 +12,8 @@ bench = false
 
 [features]
 adafruit-feather-rp2350 = []
+wokwi-test = ["dep:scara-wokwi"]
+wokwi-pio-test = ["wokwi-test"]
 
 [dependencies]
 executor = { path = "../../crates/executor" }
@@ -26,6 +28,7 @@ panic-probe = { version = "1", features = ["print-defmt"] }
 rp235x-hal = { version = "0.3", features = ["rt", "critical-section-impl", "binary-info"] }
 pio = "0.2"
 pio-proc = "0.2"
+scara-wokwi = { path = "../../tools/wokwi", optional = true, default-features = false }
 
 [profile.release]
 debug = 2

@@ -1,1 +1,3 @@
 target/
+/wokwi.vcd
+/wokwi-logic.vcd

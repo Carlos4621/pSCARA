@@ -35,6 +35,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "scara-wokwi"
+version = "0.1.0"
+dependencies = [
+ "executor",
+ "kinematics",
+ "planner",
+ "trajectory",
+ "vcd",
+]
+
+[[package]]
 name = "trajectory"
 version = "0.1.0"
 dependencies = [
@@ -46,3 +57,9 @@ dependencies = [
 [[package]]
 name = "utilities"
 version = "0.1.0"
+
+[[package]]
+name = "vcd"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4505774fc84de82eb04caa74d859342b0daa376f4c6df45149593245dd62c004"

@@ -1,0 +1,6 @@
+[wokwi]
+version = 1
+firmware = 'firmware/pico2/target/wokwi/thumbv8m.main-none-eabihf/release/pico2-step-dir'
+elf = 'firmware/pico2/target/wokwi/thumbv8m.main-none-eabihf/release/pico2-step-dir'
+vcdFile = 'wokwi.vcd'
+# gdbServerPort = 3333

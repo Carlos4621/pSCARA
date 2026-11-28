@@ -1,0 +1,13 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Wokwi: compilar Pico 2",
+      "type": "process",
+      "command": "cargo",
+      "args": ["build", "--release", "--locked", "--features", "wokwi-pio-test", "--target-dir", "target/wokwi"],
+      "options": { "cwd": "${workspaceFolder}/firmware/pico2" },
+      "problemMatcher": ["$rustc"]
+    }
+  ]
+}

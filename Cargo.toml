@@ -9,4 +9,5 @@ members = [
     "crates/planner",
     "crates/trajectory",
     "crates/utilities",
+    "tools/wokwi",
 ]

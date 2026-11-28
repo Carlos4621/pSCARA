@@ -6,8 +6,9 @@ use executor::{
 use kinematics::JointAngles;
 use planner::{
     CoordinatedJointPathProfiles, CoordinatedJointTrajectory, JointAccelerationLimits,
-    JointToStepsConverter, JointVelocityLimits, PinOperationBatch, PinOperationBatchIterator,
-    PlannerError, StepDirScheduleCursor, StepDirScheduleIterator, StepDirTiming,
+    JointToStepsConverter, JointVelocityLimits, MotorSteps, PinOperationBatch,
+    PinOperationBatchIterator, PlannerError, StepDirScheduleCursor, StepDirScheduleIterator,
+    StepDirTiming,
     StepDirection::{Negative, Positive},
     StepTimeBase, TimedCoordinatedJointPathProfiles, TrajectoryStepEventIterator,
     generate_guarded_segment_boundaries, into_step_dir_events, plan_joint_path_speeds,
@@ -293,6 +294,55 @@ fn prepared_trajectory_matches_the_generator_and_only_borrows_word_storage()
     assert_eq!(prepared.final_levels(), 0b0010);
     assert_eq!(prepared.frame_cycles(), 70 + PIO_FRAME_OVERHEAD_CYCLES);
     assert_eq!(prepared.duration_seconds(), 0.95);
+    assert_eq!(
+        prepared.start_position(),
+        MotorSteps {
+            first: 0,
+            second: 0
+        }
+    );
+    assert_eq!(
+        prepared.target_position(),
+        MotorSteps {
+            first: 2,
+            second: -1
+        }
+    );
+    Ok(())
+}
+
+#[test]
+fn prepared_trajectory_quantizes_the_first_and_last_endpoints_of_the_path()
+-> Result<(), ExecutorError> {
+    let points = points([[1.0625, -0.625], [1.25, -0.75], [1.5625, -0.375]]);
+    let limits = limits();
+    let profiles = timed_path(&points, &[0.0; 3], &limits);
+    let mut boundaries = [0; 8];
+    let mut operations = [PinOperationBatch::new(0); 64];
+    let mut storage = [PioCommandWord::END; 32];
+
+    let prepared = prepare_pio_trajectory(
+        profiles,
+        two_motor_converter(),
+        pico2_benchmark_config(),
+        &mut boundaries,
+        &mut operations,
+        &mut storage,
+    )?;
+    assert_eq!(
+        prepared.start_position(),
+        MotorSteps {
+            first: 9,
+            second: -3
+        }
+    );
+    assert_eq!(
+        prepared.target_position(),
+        MotorSteps {
+            first: 13,
+            second: -2
+        }
+    );
     Ok(())
 }
 

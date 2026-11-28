@@ -4,6 +4,7 @@ resolver = "3"
 exclude = ["firmware/pico2"]
 
 members = [
+    "crates/controller",
     "crates/executor",
     "crates/kinematics",
     "crates/planner",

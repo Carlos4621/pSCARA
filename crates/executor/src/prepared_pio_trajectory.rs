@@ -1,4 +1,7 @@
-use planner::{JointToStepsConverter, PinOperationBatch, TimedCoordinatedJointPathProfiles};
+use planner::{
+    JointToStepsConverter, MotorSteps, PinOperationBatch, PlannerError,
+    TimedCoordinatedJointPathProfiles,
+};
 
 use crate::{
     ExecutorError, PioCommandWord, PioExecutionConfig, build_pio_commands, pin_frame::STEP_MASK,
@@ -13,6 +16,8 @@ pub struct PreparedPioTrajectory<'a> {
     final_levels: u8,
     frame_cycles: u64,
     pio_frequency_hz: u64,
+    start_position: MotorSteps,
+    target_position: MotorSteps,
 }
 
 impl PreparedPioTrajectory<'_> {
@@ -44,6 +49,14 @@ impl PreparedPioTrajectory<'_> {
         self.pio_frequency_hz
     }
 
+    pub fn start_position(&self) -> MotorSteps {
+        self.start_position
+    }
+
+    pub fn target_position(&self) -> MotorSteps {
+        self.target_position
+    }
+
     /// Duración acumulada de las tramas PIO. Excluye la precarga, END y la recuperación de DMA.
     pub fn duration_seconds(&self) -> f64 {
         self.frame_cycles as f64 / self.pio_frequency_hz as f64
@@ -54,7 +67,7 @@ impl PreparedPioTrajectory<'_> {
     }
 }
 
-/// Genera y verifica la trayectoria en una sola pasada.
+/// Registra los extremos en micropasos y genera y verifica las palabras en una sola pasada.
 ///
 /// La trayectoria preparada solo toma prestado `storage`. Si hay un error,
 /// el búfer puede contener palabras parciales que deben descartarse.
@@ -70,14 +83,33 @@ pub fn prepare_pio_trajectory<'a>(
         return Err(ExecutorError::InsufficientCommandBuffer);
     }
 
+    let (start_position, target_position) = trajectory_endpoints(profiles, &converter)?;
     let commands = build_pio_commands(profiles, converter, config, boundaries, operations)?;
-    collect_commands(commands, config, storage)
+    collect_commands(commands, config, storage, start_position, target_position)
+}
+
+fn trajectory_endpoints(
+    mut profiles: TimedCoordinatedJointPathProfiles<'_>,
+    converter: &JointToStepsConverter,
+) -> Result<(MotorSteps, MotorSteps), ExecutorError> {
+    let first = profiles.next().ok_or(PlannerError::InsufficientPoints)??;
+    let start = converter.convert(first.position_at(first.start_time())?)?;
+    let mut target = converter.convert(first.position_at(first.end_time()?)?)?;
+
+    for profile in profiles {
+        let profile = profile?;
+        target = converter.convert(profile.position_at(profile.end_time()?)?)?;
+    }
+
+    Ok((start, target))
 }
 
 fn collect_commands<I>(
     mut commands: I,
     config: PioExecutionConfig,
     storage: &mut [PioCommandWord],
+    start_position: MotorSteps,
+    target_position: MotorSteps,
 ) -> Result<PreparedPioTrajectory<'_>, ExecutorError>
 where
     I: Iterator<Item = Result<PioCommandWord, ExecutorError>>,
@@ -110,6 +142,8 @@ where
                 final_levels,
                 frame_cycles,
                 pio_frequency_hz: config.pio_frequency_hz,
+                start_position,
+                target_position,
             });
         }
 

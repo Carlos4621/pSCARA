@@ -1,0 +1,11 @@
+[package]
+name = "controller"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+planner = { path = "../planner", default-features = false }
+executor = { path = "../executor" }
+
+[dev-dependencies]
+kinematics = { path = "../kinematics" }

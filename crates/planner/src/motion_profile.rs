@@ -30,6 +30,7 @@ pub struct MotionProfile {
     deceleration_time: f64,
 
     total_time: f64,
+    acceleration_distance: f64,
 }
 
 impl MotionProfile {
@@ -155,7 +156,7 @@ impl MotionProfile {
             return Err(PlannerError::NumericalFailure);
         }
 
-        Ok(Self {
+        let mut profile = Self {
             start_angle,
             end_angle,
             angular_displacement,
@@ -168,7 +169,19 @@ impl MotionProfile {
             cruise_time,
             deceleration_time,
             total_time,
-        })
+            acceleration_distance: 0.0,
+        };
+
+        if profile.cruise_time > 0.0 {
+            // Use the same ramp calculation as the scaled cruise query.
+            profile.acceleration_distance = profile.ramp_displacement(
+                profile.acceleration_time,
+                profile.total_time,
+                profile.initial_speed,
+            );
+        }
+
+        Ok(profile)
     }
 
     pub fn total_time(&self) -> f64 {
@@ -180,7 +193,37 @@ impl MotionProfile {
     }
 
     pub fn position_at(&self, time: f64) -> Result<f64, PlannerError> {
-        self.position_at_scaled(time, self.total_time)
+        self.position_at_unscaled(time)
+    }
+
+    fn position_at_unscaled(&self, time: f64) -> Result<f64, PlannerError> {
+        Self::validate_duration_time(time, self.total_time)?;
+
+        if time == self.total_time {
+            return Ok(self.end_angle);
+        }
+        if time == 0.0 || self.angular_displacement == 0.0 {
+            return Ok(self.start_angle);
+        }
+
+        let angle = match self.phase_at_unscaled(time) {
+            MotionPhase::Acceleration => self.ramp_displacement_unscaled(time, self.initial_speed),
+            MotionPhase::Cruise => {
+                self.acceleration_distance
+                    + product_ratio(&[self.peak_velocity, time - self.acceleration_time], &[])
+            }
+            MotionPhase::Deceleration => {
+                self.angular_displacement
+                    - self.ramp_displacement_unscaled(self.total_time - time, self.final_speed)
+            }
+        };
+
+        let result = self.start_angle
+            + self.displacement_direction * angle.clamp(0.0, self.angular_displacement);
+
+        utilities::validate_finite(result).map_err(|_| PlannerError::NumericalFailure)?;
+
+        Ok(result)
     }
 
     pub(crate) fn position_at_scaled(&self, time: f64, duration: f64) -> Result<f64, PlannerError> {
@@ -388,6 +431,25 @@ impl MotionProfile {
         }
     }
 
+    fn phase_at_unscaled(&self, time: f64) -> MotionPhase {
+        if time == self.total_time && self.deceleration_time > 0.0 {
+            return MotionPhase::Deceleration;
+        }
+        if self.acceleration_time > 0.0 && time <= self.acceleration_time {
+            return MotionPhase::Acceleration;
+        }
+        if self.cruise_time > 0.0 && time <= self.total_time - self.deceleration_time {
+            return MotionPhase::Cruise;
+        }
+        if self.deceleration_time > 0.0 {
+            MotionPhase::Deceleration
+        } else if self.cruise_time > 0.0 {
+            MotionPhase::Cruise
+        } else {
+            MotionPhase::Acceleration
+        }
+    }
+
     fn ramp_displacement(&self, time: f64, duration: f64, boundary_speed: f64) -> f64 {
         product_ratio(&[boundary_speed, time, self.total_time], &[duration])
             + product_ratio(
@@ -400,6 +462,18 @@ impl MotionProfile {
                 ],
                 &[2.0, duration, duration],
             )
+    }
+
+    fn ramp_displacement_unscaled(&self, time: f64, boundary_speed: f64) -> f64 {
+        let duration = self.total_time;
+
+        // An earlier factor equal to the duration can change cancellation order.
+        if boundary_speed == duration || self.max_acceleration == duration || time == duration {
+            return self.ramp_displacement(time, duration, boundary_speed);
+        }
+
+        product_ratio(&[boundary_speed, time], &[])
+            + product_ratio(&[self.max_acceleration, time, time], &[2.0])
     }
 
     fn ramp_velocity(&self, time: f64, duration: f64, boundary_speed: f64) -> f64 {
